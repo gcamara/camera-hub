@@ -25,8 +25,16 @@ final class VlcLogSink: NSObject, VLCLogging {
     case .info: tag = "I"
     default: tag = "D"
     }
-    let module = context?.module ?? "vlc"
-    let line = "\(clock.string(from: Date())) \(tag) \(module): \(message)"
+    append("\(tag) \(context?.module ?? "vlc"): \(message)")
+  }
+
+  /// The player view's own lifecycle, in the same log as libVLC's lines.
+  func note(_ message: String) {
+    append("V view: \(message)")
+  }
+
+  private func append(_ text: String) {
+    let line = "\(clock.string(from: Date())) \(text)"
     lock.lock()
     lines.append(line)
     if lines.count > Self.capacity {

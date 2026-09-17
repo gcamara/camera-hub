@@ -7,16 +7,28 @@ import MobileVLCKit
 /// media options. libVLC draws straight into a child UIView; only the player
 /// state comes back to JS as events.
 ///
-/// Two libVLC facts shape this class. `stop()` is synchronous and waits for the
-/// network input to wind down, so teardown runs on a background queue. And once
-/// `play()` has been called, every control call goes through `input_Control`,
-/// which blocks until the input thread gets to it (seconds while a stream is
-/// still connecting), and libVLC's iOS video output needs the main thread to
-/// create its view, so a control call from the main thread during connection
-/// deadlocks the picture. Nothing is sent to libVLC from the main thread after
-/// `play()`; later changes go through the background queue.
+/// Three libVLC facts shape this class.
+///
+/// Once `play()` has been called, every control call goes through `input_Control`,
+/// which blocks until the input thread gets to it (seconds while a stream is still
+/// connecting), so nothing is sent to libVLC from the main thread after `play()`;
+/// later changes go through a serial control queue.
+///
+/// libVLC's iOS video output creates and removes its GL view on the main thread,
+/// with the video-output thread waiting for it. Deallocating a `VLCMediaPlayer`
+/// joins that thread (`libvlc_media_player_destroy`), so a player that dies on the
+/// main thread deadlocks the app: the main thread waits for the video output, the
+/// video output waits for the main thread (build 10's watchdog crash log has exactly
+/// this stack). VLCKit itself holds players on the main thread for a moment after
+/// every event it delivers there, so this view keeps its own reference alive until
+/// the stop has completed and those moments have passed, and drops it off-main.
+///
+/// `stop()` is asynchronous in VLCKit 3 (`libvlc_media_player_stop_async`), so
+/// "completed" means the player reports stopped, not that `stop()` returned.
 class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   private static let controlQueue = DispatchQueue(label: "dev.gcamara.camerahub.vlc-control", qos: .userInitiated)
+  /// Concurrent: each teardown waits for its own player, without holding the others up.
+  private static let teardownQueue = DispatchQueue(label: "dev.gcamara.camerahub.vlc-teardown", qos: .utility, attributes: .concurrent)
 
   private var player: VLCMediaPlayer?
   private let videoView = UIView()
@@ -118,6 +130,7 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
       }
       return
     }
+    note("restart \(Self.describe(uri)) muted=\(muted) paused=\(paused) \(Int(bounds.width))x\(Int(bounds.height))")
     let media = VLCMedia(url: url)
     // TCP interleaving survives Wi-Fi packet loss far better than RTP over UDP,
     // and a one second cache keeps the grid responsive without stuttering.
@@ -147,6 +160,7 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     let crop = cropGeometry()
     appliedCrop = crop
     player.videoCropGeometry = crop.flatMap { strdup($0) }
+    note("play \(Self.describe(currentUri)) crop=\(crop ?? "none")")
     player.play()
   }
 
@@ -167,21 +181,72 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     Self.controlQueue.async { player.videoCropGeometry = crop.flatMap { strdup($0) } }
   }
 
-  /// Detaches on the main thread, then lets the blocking stop run elsewhere while
-  /// the closure keeps the player alive until libVLC is done with it.
+  /// Detaches the delegate on the main thread; everything else happens off it.
+  /// `drawable = nil` is a `dispatch_sync` onto the player's private queue in
+  /// VLCKit, which may be busy with `play()`, so even that stays off the main
+  /// thread. The closure is the reference that outlives VLCKit's, and it is
+  /// released where it ran: on the teardown queue.
   private func tearDown(_ player: VLCMediaPlayer?) {
     guard let player else { return }
+    note("tearDown started=\(started) state=\(Self.name(of: player.state))")
     player.delegate = nil
-    player.drawable = nil
-    Self.controlQueue.async {
+    Self.teardownQueue.async {
+      player.drawable = nil
       player.stop()
+      let deadline = Date().addingTimeInterval(10)
+      while Date() < deadline && !Self.isStopped(player.state) {
+        Thread.sleep(forTimeInterval: 0.05)
+      }
+      // The stopped event was just delivered on the main thread inside blocks and an
+      // autoreleased notification that both hold the player; let that run loop
+      // iteration end before this reference becomes the last one.
+      Thread.sleep(forTimeInterval: 1)
+      VlcLogSink.shared.note("release \(Self.isStopped(player.state) ? "after stop" : "with stop still pending")")
+      withExtendedLifetime(player) {}
     }
+  }
+
+  private static func isStopped(_ state: VLCMediaPlayerState) -> Bool {
+    switch state {
+    case .stopped, .ended, .error:
+      return true
+    default:
+      return false
+    }
+  }
+
+  // MARK: - Diagnostics
+
+  private func note(_ message: String) {
+    let id = String(UInt(bitPattern: ObjectIdentifier(self).hashValue) & 0xffff, radix: 16)
+    VlcLogSink.shared.note("[\(id)] \(message)")
+  }
+
+  private static func name(of state: VLCMediaPlayerState) -> String {
+    switch state {
+    case .stopped: return "stopped"
+    case .opening: return "opening"
+    case .buffering: return "buffering"
+    case .ended: return "ended"
+    case .error: return "error"
+    case .playing: return "playing"
+    case .paused: return "paused"
+    case .esAdded: return "esAdded"
+    @unknown default: return "state \(state.rawValue)"
+    }
+  }
+
+  /// The URL without its credentials, so the log can be shared.
+  private static func describe(_ uri: String?) -> String {
+    guard let uri else { return "nil" }
+    return uri.replacingOccurrences(of: "//[^@/]+@", with: "//***@", options: .regularExpression)
   }
 
   // MARK: - VLCMediaPlayerDelegate
 
   func mediaPlayerStateChanged(_ aNotification: Notification) {
     guard let player else { return }
+    note("state \(Self.name(of: player.state))")
     switch player.state {
     case .opening:
       onBuffering(["isBuffering": true, "state": "opening"])
