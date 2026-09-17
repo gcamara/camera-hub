@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import * as Device from 'expo-device';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -31,7 +32,9 @@ export default function ViewerScreen() {
   const streaming = useShouldStream();
   const reconnect = useReconnect(streaming && camera !== undefined);
 
-  const [kind, setKind] = useState<StreamKind>('main');
+  // Emulators decode in software and fall seconds behind a 1080p main stream; the
+  // picture freezes on its first frame. Real devices start on the main stream.
+  const [kind, setKind] = useState<StreamKind>(Device.isDevice || !camera || !hasSubStream(camera) ? 'main' : 'sub');
   const [muted, setMuted] = useState(true);
   const [overlay, setOverlay] = useState(true);
   const [logOpen, setLogOpen] = useState(false);

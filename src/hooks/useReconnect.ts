@@ -69,12 +69,16 @@ export function useReconnect(enabled: boolean): ReconnectState {
       setRetryIn(null);
       setStatus('stopped');
     } else if (!wasEnabled.current) {
-      // Re-enabled after a pause: a fresh attempt. The initial mount already has one.
+      // Re-enabled after a pause. The player was unmounted while disabled, so the
+      // remount that comes with `enabled` is already a fresh connection; bumping
+      // `attempt` here would replace that player within the same frame and leave
+      // the first one streaming with no view.
       failures.current = 0;
-      retryNow();
+      setDetail(undefined);
+      setStatus('connecting');
     }
     wasEnabled.current = enabled;
-  }, [enabled, clearTimers, retryNow]);
+  }, [enabled, clearTimers]);
 
   return { status, detail, retryIn, attempt, handleStatus, retryNow };
 }

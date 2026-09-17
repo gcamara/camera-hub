@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Modal, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, IconButton } from './ui';
@@ -81,6 +81,6 @@ const styles = StyleSheet.create({
   title: { fontSize: font.title, fontWeight: '700', color: colors.text },
   subtitle: { fontSize: font.small, color: colors.muted },
   body: { paddingVertical: spacing.sm, gap: 2 },
-  line: { fontFamily: 'Menlo', fontSize: 11, lineHeight: 15, color: colors.muted },
+  line: { fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 11, lineHeight: 15, color: colors.muted },
   actions: { flexDirection: 'row', gap: spacing.sm, paddingTop: spacing.md },
 });
