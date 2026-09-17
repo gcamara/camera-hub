@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 import { create } from 'zustand';
 
 import { DEFAULT_SETTINGS, type Camera, type CameraInput, type Settings } from '@/lib/types';
@@ -12,9 +13,16 @@ function passwordKey(id: string): string {
   return `camerahub.pw.${id.replace(/[^A-Za-z0-9._-]/g, '')}`;
 }
 
+/** The keychain is native only; the browser preview keeps passwords in plain storage and is never a shipping target. */
+const secrets = {
+  get: (key: string) => (Platform.OS === 'web' ? AsyncStorage.getItem(key) : SecureStore.getItemAsync(key)),
+  set: (key: string, value: string) => (Platform.OS === 'web' ? AsyncStorage.setItem(key, value) : SecureStore.setItemAsync(key, value)),
+  remove: (key: string) => (Platform.OS === 'web' ? AsyncStorage.removeItem(key) : SecureStore.deleteItemAsync(key)),
+};
+
 async function readPassword(id: string): Promise<string> {
   try {
-    return (await SecureStore.getItemAsync(passwordKey(id))) ?? '';
+    return (await secrets.get(passwordKey(id))) ?? '';
   } catch {
     return '';
   }
@@ -67,7 +75,7 @@ export const useCameraStore = create<CameraState>((set, get) => ({
 
   addCamera: async (input, password) => {
     const camera: Camera = { ...input, id: Crypto.randomUUID(), createdAt: Date.now() };
-    await SecureStore.setItemAsync(passwordKey(camera.id), password);
+    await secrets.set(passwordKey(camera.id), password);
     const cameras = [...get().cameras, camera];
     await persistCameras(cameras);
     set({ cameras, passwords: { ...get().passwords, [camera.id]: password } });
@@ -79,7 +87,7 @@ export const useCameraStore = create<CameraState>((set, get) => ({
     await persistCameras(cameras);
     const passwords = { ...get().passwords };
     if (password !== undefined) {
-      await SecureStore.setItemAsync(passwordKey(id), password);
+      await secrets.set(passwordKey(id), password);
       passwords[id] = password;
     }
     set({ cameras, passwords });
@@ -89,7 +97,7 @@ export const useCameraStore = create<CameraState>((set, get) => ({
     const cameras = get().cameras.filter((camera) => camera.id !== id);
     await persistCameras(cameras);
     try {
-      await SecureStore.deleteItemAsync(passwordKey(id));
+      await secrets.remove(passwordKey(id));
     } catch {
       // The secret may already be gone; the camera entry is what matters.
     }
