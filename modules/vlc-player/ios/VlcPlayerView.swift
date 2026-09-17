@@ -257,6 +257,10 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
       hasStarted = true
       onBuffering(["isBuffering": false, "state": "playing"])
       onPlaying([:])
+    case .esAdded:
+      // Not a state to show, but proof the handshake is still moving: a camera that
+      // is out of RTSP sessions answers each request only as an old one expires.
+      onBuffering(["isBuffering": true, "state": "esAdded"])
     case .paused:
       onPaused([:])
     case .stopped, .ended:

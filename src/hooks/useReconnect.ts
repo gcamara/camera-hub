@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { PlayerStatus } from '@/components/CameraPlayer';
 
-const RETRY_BASE_MS = 3000;
-const RETRY_MAX_MS = 30000;
+// Cameras hold an abandoned RTSP session for their session timeout (15 s on a Tapo
+// C200) and refuse new ones until it lapses, so a retry any sooner just queues
+// behind the session the failed attempt left behind.
+const RETRY_BASE_MS = 8000;
+const RETRY_MAX_MS = 60000;
 
 export interface ReconnectState {
   status: PlayerStatus;

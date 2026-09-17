@@ -221,6 +221,7 @@ class VlcPlayerView(context: Context, appContext: AppContext) : ExpoView(context
         buffering(false, "playing")
         onPlaying(emptyMap())
       }
+      MediaPlayer.Event.ESAdded -> buffering(true, "esAdded")
       MediaPlayer.Event.Paused -> onPaused(emptyMap())
       MediaPlayer.Event.Stopped, MediaPlayer.Event.EndReached -> {
         if (hasStarted) {

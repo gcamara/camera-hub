@@ -9,7 +9,7 @@ interface CameraPlayerProps {
   uri: string;
   muted?: boolean;
   contentFit?: 'contain' | 'cover';
-  /** Milliseconds without a frame before the stream is reported as an error. */
+  /** Milliseconds without any progress from libVLC before the stream is reported as an error. */
   connectTimeoutMs?: number;
   onStatus?: (status: PlayerStatus, detail?: string) => void;
   style?: StyleProp<ViewStyle>;
@@ -23,7 +23,7 @@ export function CameraPlayer({
   uri,
   muted = true,
   contentFit = 'contain',
-  connectTimeoutMs = 20000,
+  connectTimeoutMs = 25000,
   onStatus,
   style,
 }: CameraPlayerProps) {
@@ -49,15 +49,26 @@ export function CameraPlayer({
     }
   }, []);
 
-  useEffect(() => {
-    report('connecting');
+  /**
+   * Fires only after the connection has gone quiet, not after a fixed deadline:
+   * a busy camera can take three times this long to hand out a session, and
+   * every attempt cut short leaves a stale session behind that makes the next
+   * one slower still. Each state libVLC reports is progress and starts it over.
+   */
+  const armWatchdog = useCallback(() => {
+    clearWatchdog();
     watchdog.current = setTimeout(() => {
       if (statusRef.current === 'connecting' || statusRef.current === 'buffering') {
-        report('error', `No video after ${Math.round(connectTimeoutMs / 1000)} s (VLC state: ${lastStateRef.current}).`);
+        report('error', `No video for ${Math.round(connectTimeoutMs / 1000)} s (VLC state: ${lastStateRef.current}).`);
       }
     }, connectTimeoutMs);
+  }, [clearWatchdog, connectTimeoutMs, report]);
+
+  useEffect(() => {
+    report('connecting');
+    armWatchdog();
     return clearWatchdog;
-  }, [uri, connectTimeoutMs, report, clearWatchdog]);
+  }, [uri, report, armWatchdog, clearWatchdog]);
 
   return (
     <VlcPlayerView
@@ -71,7 +82,10 @@ export function CameraPlayer({
         report('live');
       }}
       onBuffering={({ nativeEvent }) => {
-        lastStateRef.current = nativeEvent.state ?? lastStateRef.current;
+        if (nativeEvent.state && nativeEvent.state !== lastStateRef.current) {
+          lastStateRef.current = nativeEvent.state;
+          armWatchdog();
+        }
         if (!nativeEvent.isBuffering || statusRef.current === 'live') return;
         report('buffering', nativeEvent.state === 'opening' ? 'Opening stream…' : 'Buffering…');
       }}

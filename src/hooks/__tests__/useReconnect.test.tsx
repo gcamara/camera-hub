@@ -52,35 +52,35 @@ describe('useReconnect', () => {
     const hook = mount(true);
     act(() => hook.state.handleStatus('error', 'No video'));
     expect(hook.state.status).toBe('error');
-    expect(hook.state.retryIn).toBe(3);
+    expect(hook.state.retryIn).toBe(8);
     expect(hook.state.attempt).toBe(0);
 
     act(() => {
-      jest.advanceTimersByTime(3000);
+      jest.advanceTimersByTime(8000);
     });
     expect(hook.state.attempt).toBe(1);
     expect(hook.state.retryIn).toBeNull();
     expect(hook.state.status).toBe('connecting');
 
     act(() => hook.state.handleStatus('error', 'No video'));
-    expect(hook.state.retryIn).toBe(6);
+    expect(hook.state.retryIn).toBe(16);
   });
 
   it('forgets the back-off once live and when re-enabled', () => {
     const hook = mount(true);
     act(() => hook.state.handleStatus('error'));
     act(() => {
-      jest.advanceTimersByTime(3000);
+      jest.advanceTimersByTime(8000);
     });
     act(() => hook.state.handleStatus('live'));
     act(() => hook.state.handleStatus('error'));
-    expect(hook.state.retryIn).toBe(3);
+    expect(hook.state.retryIn).toBe(8);
 
     hook.setEnabled(false);
     expect(hook.state.retryIn).toBeNull();
     hook.setEnabled(true);
     act(() => hook.state.handleStatus('error'));
-    expect(hook.state.retryIn).toBe(3);
+    expect(hook.state.retryIn).toBe(8);
   });
 
   it('does not schedule a retry while disabled', () => {
@@ -88,7 +88,7 @@ describe('useReconnect', () => {
     act(() => hook.state.handleStatus('error'));
     expect(hook.state.retryIn).toBeNull();
     act(() => {
-      jest.advanceTimersByTime(30000);
+      jest.advanceTimersByTime(60000);
     });
     expect(hook.state.attempt).toBe(0);
   });
