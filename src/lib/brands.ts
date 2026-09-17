@@ -134,3 +134,23 @@ export function resolvePathTemplate(template: string, channel: number): string {
   const ch = Math.max(1, Math.floor(channel) || 1);
   return template.replace(/\{ch2\}/g, String(ch).padStart(2, '0')).replace(/\{ch\}/g, String(ch));
 }
+
+const MANUFACTURER_PATTERNS: Array<[RegExp, BrandId]> = [
+  [/tp-?link|tapo/i, 'tapo'],
+  [/reolink/i, 'reolink'],
+  [/hikvision|hik-?vision|annke|hilook|ezviz/i, 'hikvision'],
+  [/dahua|amcrest|lorex|imou/i, 'dahua'],
+  [/axis/i, 'axis'],
+  [/foscam/i, 'foscam'],
+  [/uniview|\bunv\b/i, 'uniview'],
+  [/ubiquiti|unifi/i, 'ubiquiti'],
+  [/wyze/i, 'wyze'],
+  [/eufy|anker/i, 'eufy'],
+];
+
+/** Maps the Manufacturer string an ONVIF GetDeviceInformation returns onto a preset; 'onvif' when unknown. */
+export function brandFromManufacturer(manufacturer: string | undefined): BrandId {
+  if (!manufacturer) return 'onvif';
+  const hit = MANUFACTURER_PATTERNS.find(([pattern]) => pattern.test(manufacturer));
+  return hit ? hit[1] : 'onvif';
+}

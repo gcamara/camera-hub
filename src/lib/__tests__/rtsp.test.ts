@@ -1,4 +1,4 @@
-import { BRANDS, resolvePathTemplate } from '../brands';
+import { BRANDS, brandFromManufacturer, resolvePathTemplate } from '../brands';
 import { buildStreamUrl, composeRtspUrl, hasSubStream, normalizePath, parseRtspUrl, redactUrl, streamPath } from '../rtsp';
 
 const camera = {
@@ -98,5 +98,26 @@ describe('brand presets', () => {
     const parsed = parseRtspUrl(url);
     expect(parsed).not.toBeNull();
     expect(parsed!.path).not.toContain('{');
+  });
+});
+
+describe('brandFromManufacturer', () => {
+  it.each([
+    ['TP-Link', 'tapo'],
+    ['tp-link', 'tapo'],
+    ['Reolink', 'reolink'],
+    ['HIKVISION', 'hikvision'],
+    ['Annke', 'hikvision'],
+    ['Dahua Technology', 'dahua'],
+    ['Amcrest', 'dahua'],
+    ['AXIS', 'axis'],
+    ['Foscam', 'foscam'],
+    ['UNV', 'uniview'],
+    ['Ubiquiti Inc.', 'ubiquiti'],
+    ['Anker Innovations', 'eufy'],
+    ['Acme Cams', 'onvif'],
+    [undefined, 'onvif'],
+  ])('maps %j to %s', (manufacturer, expected) => {
+    expect(brandFromManufacturer(manufacturer)).toBe(expected);
   });
 });

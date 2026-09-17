@@ -1,15 +1,20 @@
 import ExpoModulesCore
 import MobileVLCKit
 
-/// One libVLC player per mounted view. libVLC draws straight into this UIView
+/// One libVLC player per mounted view. libVLC draws straight into a child UIView
 /// (`drawable`), so there is nothing to bridge for the video itself; only the
 /// player state comes back to JS as events.
 class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   private let player: VLCMediaPlayer
+  private let videoView = UIView()
   private var currentUri: String?
   private var paused = false
   private var muted = true
   private var cover = false
+  /// True once the current media reached buffering/playing. libVLC reports the
+  /// `stopped` of the previous media asynchronously, so a stop that arrives before
+  /// this flips is stale and must not be surfaced as the stream ending.
+  private var hasStarted = false
 
   let onPlaying = EventDispatcher()
   let onBuffering = EventDispatcher()
@@ -30,13 +35,19 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     super.init(appContext: appContext)
     backgroundColor = .black
     clipsToBounds = true
-    player.drawable = self
+    videoView.backgroundColor = .black
+    videoView.frame = bounds
+    videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    addSubview(videoView)
+    player.drawable = videoView
     player.delegate = self
   }
 
   deinit {
     player.delegate = nil
-    player.stop()
+    if player.media != nil {
+      player.stop()
+    }
     player.drawable = nil
   }
 
@@ -45,9 +56,12 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   func setUri(_ uri: String?) {
     guard uri != currentUri else { return }
     currentUri = uri
-    player.stop()
+    hasStarted = false
+    if player.media != nil {
+      player.stop()
+    }
     guard let uri, let url = URL(string: uri) else {
-      onError(["message": "Invalid stream URL"])
+      onError(["message": "Invalid stream URL", "state": "invalid"])
       return
     }
     player.media = VLCMedia(url: url)
@@ -80,6 +94,7 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
 
   override func layoutSubviews() {
     super.layoutSubviews()
+    videoView.frame = bounds
     applyCrop()
   }
 
@@ -99,17 +114,23 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
 
   func mediaPlayerStateChanged(_ aNotification: Notification) {
     switch player.state {
-    case .playing:
-      onBuffering(["isBuffering": false])
-      onPlaying([:])
+    case .opening:
+      onBuffering(["isBuffering": true, "state": "opening"])
     case .buffering:
-      onBuffering(["isBuffering": true])
+      hasStarted = true
+      onBuffering(["isBuffering": true, "state": "buffering"])
+    case .playing:
+      hasStarted = true
+      onBuffering(["isBuffering": false, "state": "playing"])
+      onPlaying([:])
     case .paused:
       onPaused([:])
     case .stopped, .ended:
-      onStopped([:])
+      if hasStarted {
+        onStopped(["state": player.state == .ended ? "ended" : "stopped"])
+      }
     case .error:
-      onError(["message": "libVLC could not open the stream"])
+      onError(["message": "libVLC could not open the stream", "state": "error"])
     default:
       break
     }

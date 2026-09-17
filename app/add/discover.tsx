@@ -16,6 +16,7 @@ import {
   type DiscoveredDevice,
   type OnvifProfile,
 } from '@/lib/onvif';
+import { brandFromManufacturer } from '@/lib/brands';
 import { probeOnvif } from '@/lib/onvif/discovery';
 import { parseRtspUrl } from '@/lib/rtsp';
 import type { CameraInput } from '@/lib/types';
@@ -109,7 +110,7 @@ function DeviceCard({ device, existingName, expanded, onToggle, onAdded }: Devic
       }
       const input: CameraInput = {
         name: name.trim() || device.host,
-        brand: 'onvif',
+        brand: brandFromManufacturer(connected.info.manufacturer),
         host: device.host,
         rtspPort: mainUri.port,
         username,

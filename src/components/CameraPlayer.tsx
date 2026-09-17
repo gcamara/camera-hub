@@ -32,9 +32,12 @@ export function CameraPlayer({
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
 
+  const detailRef = useRef<string | undefined>(undefined);
+
   const report = useCallback((status: PlayerStatus, detail?: string) => {
-    if (statusRef.current === status && status !== 'error') return;
+    if (statusRef.current === status && detailRef.current === detail && status !== 'error') return;
     statusRef.current = status;
+    detailRef.current = detail;
     onStatusRef.current?.(status, detail);
   }, []);
 
@@ -66,15 +69,16 @@ export function CameraPlayer({
         report('live');
       }}
       onBuffering={({ nativeEvent }) => {
-        if (nativeEvent.isBuffering && statusRef.current !== 'live') report('buffering');
+        if (!nativeEvent.isBuffering || statusRef.current === 'live') return;
+        report('buffering', nativeEvent.state === 'opening' ? 'Opening stream…' : 'Buffering…');
       }}
       onError={({ nativeEvent }) => {
         clearWatchdog();
         report('error', nativeEvent.message);
       }}
-      onStopped={() => {
+      onStopped={({ nativeEvent }) => {
         clearWatchdog();
-        report('error', 'The camera closed the stream.');
+        report('error', nativeEvent.state === 'ended' ? 'The stream ended.' : 'The camera closed the stream.');
       }}
       onPaused={() => report('stopped')}
     />
