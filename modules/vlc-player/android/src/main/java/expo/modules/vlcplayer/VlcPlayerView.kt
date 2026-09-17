@@ -3,6 +3,7 @@ package expo.modules.vlcplayer
 import android.content.Context
 import android.graphics.Color
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import com.facebook.react.uimanager.PointerEvents
 import com.facebook.react.uimanager.ReactPointerEventsView
@@ -14,6 +15,7 @@ import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Android twin of the iOS view: one libVLC player per stream drawing into a
@@ -175,14 +177,26 @@ class VlcPlayerView(context: Context, appContext: AppContext) : ExpoView(context
       return
     }
     started = true
-    post {
-      if (player !== current) return@post
-      log("play ${describe(currentUri)}")
-      current.attachViews(videoLayout, null, false, true)
-      measureAndLayout()
-      current.videoScale = scaleType()
-      current.play()
+    post { startWhenSessionFree(current, SystemClock.uptimeMillis()) }
+  }
+
+  /**
+   * Cameras allow very few concurrent RTSP sessions, and React Native builds the
+   * next screen's view before destroying the previous screen's, so without this
+   * the grid tile and the viewer ask for a session at the same time on every tap.
+   */
+  private fun startWhenSessionFree(current: MediaPlayer, since: Long) {
+    if (player !== current) return
+    val waited = SystemClock.uptimeMillis() - since
+    if (sessionsClosing.get() > 0 && waited < SESSION_WAIT_MS) {
+      postDelayed({ startWhenSessionFree(current, since) }, 50)
+      return
     }
+    log("play ${describe(currentUri)} after ${waited}ms")
+    current.attachViews(videoLayout, null, false, true)
+    measureAndLayout()
+    current.videoScale = scaleType()
+    current.play()
   }
 
   private fun scaleType() = if (cover) MediaPlayer.ScaleType.SURFACE_FILL else MediaPlayer.ScaleType.SURFACE_BEST_FIT
@@ -194,12 +208,24 @@ class VlcPlayerView(context: Context, appContext: AppContext) : ExpoView(context
     libVlc = null
     log("tearDown started=$started")
     oldPlayer.setEventListener(null)
-    if (started) oldPlayer.detachViews()
+    val held = started
+    if (held) {
+      oldPlayer.detachViews()
+      sessionsClosing.incrementAndGet()
+    }
     controlExecutor.execute {
-      oldPlayer.stop()
-      oldPlayer.release()
-      oldLib?.release()
-      log("tearDown released")
+      val startedAt = SystemClock.uptimeMillis()
+      try {
+        oldPlayer.stop()
+        oldPlayer.release()
+        oldLib?.release()
+      } finally {
+        // The camera has the session back now; the next stream may start.
+        if (held) {
+          sessionsClosing.decrementAndGet()
+          log("session freed after ${SystemClock.uptimeMillis() - startedAt}ms")
+        }
+      }
     }
   }
 
@@ -266,6 +292,12 @@ class VlcPlayerView(context: Context, appContext: AppContext) : ExpoView(context
 
   companion object {
     const val TAG = "VlcPlayerView"
+
+    /** How long a new stream waits for the camera to take an old session back. */
+    private const val SESSION_WAIT_MS = 6000L
+
+    /** Players whose RTSP session the camera has not released yet. */
+    private val sessionsClosing = AtomicInteger(0)
 
     /** Fired several times a second while playing; they only say the clock moved. */
     private val CHATTY_EVENTS = setOf(MediaPlayer.Event.TimeChanged, MediaPlayer.Event.PositionChanged, MediaPlayer.Event.LengthChanged)

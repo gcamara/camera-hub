@@ -29,6 +29,8 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   private static let controlQueue = DispatchQueue(label: "dev.gcamara.camerahub.vlc-control", qos: .userInitiated)
   /// Concurrent: each teardown waits for its own player, without holding the others up.
   private static let teardownQueue = DispatchQueue(label: "dev.gcamara.camerahub.vlc-teardown", qos: .utility, attributes: .concurrent)
+  /// Non-empty while a player still holds an RTSP session the camera has not taken back.
+  private static let sessionGate = DispatchGroup()
 
   private var player: VLCMediaPlayer?
   private let videoView = UIView()
@@ -154,14 +156,23 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
 
   /// Plays once the view has a size: the cover crop needs it, and applying it
   /// before `play()` keeps it off the blocking control path.
+  ///
+  /// Waits first for every player that is still giving a session back. Cameras
+  /// allow very few concurrent RTSP sessions — a Tapo C200 starts refusing SETUP
+  /// and PLAY outright — and React Native builds the next screen's view before it
+  /// destroys the previous screen's, so the grid tile and the viewer would
+  /// otherwise ask for a session at the same time on every tap.
   private func startIfReady() {
     guard let player, !started, !paused, bounds.width > 0, bounds.height > 0 else { return }
     started = true
     let crop = cropGeometry()
     appliedCrop = crop
     player.videoCropGeometry = crop.flatMap { strdup($0) }
-    note("play \(Self.describe(currentUri)) crop=\(crop ?? "none")")
-    player.play()
+    Self.sessionGate.notify(queue: .main) { [weak self] in
+      guard let self, self.player === player else { return }
+      self.note("play \(Self.describe(self.currentUri)) crop=\(crop ?? "none") \(Int(self.bounds.width))x\(Int(self.bounds.height))")
+      player.play()
+    }
   }
 
   private func cropGeometry() -> String? {
@@ -190,18 +201,26 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     guard let player else { return }
     note("tearDown started=\(started) state=\(Self.name(of: player.state))")
     player.delegate = nil
+    let held = started
+    if held { Self.sessionGate.enter() }
     Self.teardownQueue.async {
+      let startedAt = Date()
       player.drawable = nil
       player.stop()
-      let deadline = Date().addingTimeInterval(10)
-      while Date() < deadline && !Self.isStopped(player.state) {
+      while Date().timeIntervalSince(startedAt) < 8 && !Self.isStopped(player.state) {
         Thread.sleep(forTimeInterval: 0.05)
+      }
+      let stopped = Self.isStopped(player.state)
+      // The camera has the session back now; the next stream may start.
+      if held {
+        let seconds = String(format: "%.1f", Date().timeIntervalSince(startedAt))
+        VlcLogSink.shared.note("session freed after \(seconds)s\(stopped ? "" : " (stop timed out)")")
+        Self.sessionGate.leave()
       }
       // The stopped event was just delivered on the main thread inside blocks and an
       // autoreleased notification that both hold the player; let that run loop
       // iteration end before this reference becomes the last one.
       Thread.sleep(forTimeInterval: 1)
-      VlcLogSink.shared.note("release \(Self.isStopped(player.state) ? "after stop" : "with stop still pending")")
       withExtendedLifetime(player) {}
     }
   }
