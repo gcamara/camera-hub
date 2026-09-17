@@ -111,3 +111,27 @@ src/store/cameraStore.ts   zustand store; AsyncStorage for cameras, SecureStore 
 - Tapo cameras: sign in with the *Camera Account* created in the Tapo app, not your TP‑Link login.
 - Away from home, reach your LAN through a VPN (Tailscale, WireGuard); the app has no relay.
 - Bundle size grows by roughly 25–35 MB (thinned) because of MobileVLCKit.
+
+### Xcode Cloud (alternative to EAS)
+
+The repo is also wired for Xcode Cloud the way `health-tracker` is: `ios/ci_scripts/ci_post_clone.sh`
+installs Node and CocoaPods and runs `expo prebuild` on Apple's clean clone (so `ios/` stays out of
+git), `ci_pre_xcodebuild.sh` sets `CFBundleVersion` from `CI_BUILD_NUMBER + 100` (EAS already used
+1–7), and a push to **`release`** is the build trigger — `main` never builds:
+
+```bash
+git checkout release && git merge --ff-only main && git push origin release && git checkout main
+```
+
+Apple's API cannot create the Xcode Cloud *product* (it answers `ciProducts does not allow CREATE`),
+so the first workflow is a one-time job on a Mac: `npx expo prebuild --platform ios`, open
+`ios/CameraHub.xcworkspace` in Xcode, Integrate → Create Workflow, pick the "Camera Hub" app, grant the
+Xcode Cloud GitHub App access to `gcamara/camera-hub`, start condition = branch `release`, action =
+Archive iOS → TestFlight (Internal). From then on `scripts/xcode-cloud-build.mjs --list | --status |
+--branch release [--wait]` follows and re-runs builds through the API, with the same
+`EXPO_ASC_*` variables as the submit script.
+
+Quota: Xcode Cloud's free 25 h/month is per Apple team and shared with Health Tracker (which budgets
+80 % of it); a Camera Hub build is ~10–15 min. EAS's free 30 builds/month are separate, so EAS
+remains the cheaper place to iterate; Xcode Cloud's advantage is that it uploads straight to
+TestFlight with no submission queue.
