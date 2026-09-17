@@ -45,3 +45,7 @@ credentials.json
 
 # scratch
 *.tmp.json
+
+# Local Expo module build output
+modules/*/android/build/
+modules/*/android/.cxx/
