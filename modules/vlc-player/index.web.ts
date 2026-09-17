@@ -50,3 +50,9 @@ const styles = StyleSheet.create({
   box: { backgroundColor: '#111111', alignItems: 'center', justifyContent: 'center' },
   label: { color: '#8A8A8A', fontSize: 11, letterSpacing: 0.4, textAlign: 'center', padding: 8 },
 });
+
+export function getVlcLog(): Promise<string[]> {
+  return Promise.resolve(['(no libVLC in the browser — the player here is simulated)']);
+}
+
+export function clearVlcLog(): void {}

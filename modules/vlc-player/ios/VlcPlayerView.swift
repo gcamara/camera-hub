@@ -1,19 +1,20 @@
 import ExpoModulesCore
 import MobileVLCKit
 
-/// One libVLC player per stream. libVLC draws straight into a child UIView
-/// (`drawable`), so there is nothing to bridge for the video itself; only the
-/// player state comes back to JS as events.
+/// One libVLC player per stream, all on the shared VLCLibrary: VLCKit does not
+/// support several library instances, and a media created on the shared library
+/// must not be played by a player on a private one. Stream options travel as
+/// media options. libVLC draws straight into a child UIView; only the player
+/// state comes back to JS as events.
 ///
 /// Two libVLC facts shape this class. `stop()` is synchronous and waits for the
 /// network input to wind down, so teardown runs on a background queue. And once
-/// `play()` has been called, every control call (crop, mute, volume) goes through
-/// `input_Control`, which blocks the caller until the input thread gets to it —
-/// while a stream is still connecting that can be seconds, and libVLC's iOS video
-/// output needs the main thread to create its view, so a control call from the main
-/// thread during connection deadlocks the picture. Before `play()` the same calls
-/// are cheap, so crop and mute are applied then, and every later change is sent
-/// from the background queue.
+/// `play()` has been called, every control call goes through `input_Control`,
+/// which blocks until the input thread gets to it (seconds while a stream is
+/// still connecting), and libVLC's iOS video output needs the main thread to
+/// create its view, so a control call from the main thread during connection
+/// deadlocks the picture. Nothing is sent to libVLC from the main thread after
+/// `play()`; later changes go through the background queue.
 class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   private static let controlQueue = DispatchQueue(label: "dev.gcamara.camerahub.vlc-control", qos: .userInitiated)
 
@@ -24,6 +25,7 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   private var muted = true
   private var cover = false
   private var started = false
+  private var startedMuted = true
   private var appliedCrop: String?
   /// True once the current media reached buffering/playing; a `stopped` before
   /// that is the previous media's and must not be surfaced.
@@ -54,38 +56,20 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   func setUri(_ uri: String?) {
     guard uri != currentUri else { return }
     currentUri = uri
-    tearDown(player)
-    player = nil
-    started = false
-    hasStarted = false
-    appliedCrop = nil
-    guard let uri, let url = URL(string: uri) else {
-      if uri != nil {
-        onError(["message": "Invalid stream URL", "state": "invalid"])
-      }
-      return
-    }
-    // TCP interleaving survives Wi-Fi packet loss far better than RTP over UDP,
-    // and a one second cache keeps the grid responsive without stuttering.
-    let next = VLCMediaPlayer(options: [
-      "--rtsp-tcp",
-      "--network-caching=1000",
-      "--live-caching=1000",
-    ])
-    next.media = VLCMedia(url: url)
-    next.drawable = videoView
-    next.delegate = self
-    player = next
-    startIfReady()
+    restart()
   }
 
   func setMuted(_ value: Bool) {
+    guard value != muted else { return }
     muted = value
-    guard let player else { return }
-    if started {
-      Self.controlQueue.async { player.audio?.isMuted = value }
+    guard let player, started else { return }
+    if value {
+      Self.controlQueue.async { player.audio?.isMuted = true }
+    } else if startedMuted {
+      // Audio was left out of the stream entirely; bring it back with a fresh start.
+      restart()
     } else {
-      player.audio?.isMuted = value
+      Self.controlQueue.async { player.audio?.isMuted = false }
     }
   }
 
@@ -122,12 +106,44 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
 
   // MARK: - Playback
 
-  /// Plays once the view has a size: the cover crop needs it, and applying crop and
-  /// mute before `play()` keeps them off the blocking control path.
+  private func restart() {
+    tearDown(player)
+    player = nil
+    started = false
+    hasStarted = false
+    appliedCrop = nil
+    guard let uri = currentUri, let url = URL(string: uri) else {
+      if currentUri != nil {
+        onError(["message": "Invalid stream URL", "state": "invalid"])
+      }
+      return
+    }
+    let media = VLCMedia(url: url)
+    // TCP interleaving survives Wi-Fi packet loss far better than RTP over UDP,
+    // and a one second cache keeps the grid responsive without stuttering.
+    // Muted views drop audio at the source: mute/volume calls before play() are
+    // no-ops in libVLC because the audio output does not exist yet.
+    var options = [":rtsp-tcp", ":network-caching=1000", ":live-caching=1000"]
+    if muted {
+      options.append(":no-audio")
+    }
+    for option in options {
+      media.addOption(option)
+    }
+    startedMuted = muted
+    let next = VLCMediaPlayer()
+    next.media = media
+    next.drawable = videoView
+    next.delegate = self
+    player = next
+    startIfReady()
+  }
+
+  /// Plays once the view has a size: the cover crop needs it, and applying it
+  /// before `play()` keeps it off the blocking control path.
   private func startIfReady() {
     guard let player, !started, !paused, bounds.width > 0, bounds.height > 0 else { return }
     started = true
-    player.audio?.isMuted = muted
     let crop = cropGeometry()
     appliedCrop = crop
     player.videoCropGeometry = crop.flatMap { strdup($0) }

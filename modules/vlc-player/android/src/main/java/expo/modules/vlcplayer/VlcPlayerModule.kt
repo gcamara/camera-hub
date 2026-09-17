@@ -2,10 +2,24 @@ package expo.modules.vlcplayer
 
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.io.BufferedReader
+import java.io.InputStreamReader
 
 class VlcPlayerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("VlcPlayer")
+
+    /** libVLC on Android logs straight to logcat; this reads its recent lines back for the in-app panel. */
+    AsyncFunction("getLog") { ->
+      val process = ProcessBuilder("logcat", "-d", "-v", "time", "-t", "400", "VLC:*", "VLC-std:*", "*:S").start()
+      BufferedReader(InputStreamReader(process.inputStream)).useLines { lines ->
+        lines.filter { it.isNotBlank() && !it.startsWith("---") }.toList()
+      }
+    }
+
+    Function("clearLog") {
+      ProcessBuilder("logcat", "-c").start().waitFor()
+    }
 
     View(VlcPlayerView::class) {
       Events("onPlaying", "onBuffering", "onError", "onStopped", "onPaused")

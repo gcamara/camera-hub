@@ -42,3 +42,6 @@ yarn-error.*
 
 # EAS local credentials, never committed
 credentials.json
+
+# scratch
+*.tmp.json

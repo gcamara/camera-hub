@@ -1,8 +1,21 @@
 import ExpoModulesCore
+import MobileVLCKit
 
 public class VlcPlayerModule: Module {
   public func definition() -> ModuleDefinition {
     Name("VlcPlayer")
+
+    OnCreate {
+      VLCLibrary.shared().loggers = [VlcLogSink.shared]
+    }
+
+    AsyncFunction("getLog") { () -> [String] in
+      VlcLogSink.shared.snapshot()
+    }
+
+    Function("clearLog") {
+      VlcLogSink.shared.clear()
+    }
 
     View(VlcPlayerView.self) {
       Events("onPlaying", "onBuffering", "onError", "onStopped", "onPaused")

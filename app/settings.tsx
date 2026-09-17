@@ -1,7 +1,9 @@
 import Constants from 'expo-constants';
+import { useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
-import { Card, Muted, SectionLabel, Segmented } from '@/components/ui';
+import { VlcLogSheet } from '@/components/VlcLogSheet';
+import { Button, Card, Muted, SectionLabel, Segmented } from '@/components/ui';
 import { useCameraStore } from '@/store/cameraStore';
 import { colors, font, spacing } from '@/theme';
 
@@ -10,6 +12,7 @@ type Columns = '1' | '2' | '3';
 export default function SettingsScreen() {
   const settings = useCameraStore((state) => state.settings);
   const updateSettings = useCameraStore((state) => state.updateSettings);
+  const [logOpen, setLogOpen] = useState(false);
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -59,6 +62,13 @@ export default function SettingsScreen() {
         </Muted>
         <Muted>Version {Constants.expoConfig?.version ?? '1.0.0'}</Muted>
       </Card>
+
+      <Card>
+        <SectionLabel>Diagnostics</SectionLabel>
+        <Muted>The player engine's own log. Open it after a stream fails and share it.</Muted>
+        <Button title="VLC log" variant="secondary" icon="document-text-outline" onPress={() => setLogOpen(true)} />
+      </Card>
+      <VlcLogSheet visible={logOpen} title="Settings" onClose={() => setLogOpen(false)} />
     </ScrollView>
   );
 }

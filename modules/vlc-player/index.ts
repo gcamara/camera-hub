@@ -1,4 +1,4 @@
-import { requireNativeViewManager } from 'expo-modules-core';
+import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 import type { ComponentType } from 'react';
 import type { ViewProps } from 'react-native';
 
@@ -19,5 +19,21 @@ export interface VlcPlayerViewProps extends ViewProps {
   onPaused?: (event: NativeEvent<Record<string, never>>) => void;
 }
 
-/** Native view backed by MobileVLCKit; see modules/vlc-player/ios. iOS only. */
+interface VlcPlayerNativeModule {
+  getLog(): Promise<string[]>;
+  clearLog(): void;
+}
+
+/** Native view backed by libVLC (MobileVLCKit on iOS, libvlc-all on Android); see modules/vlc-player. */
 export const VlcPlayerView: ComponentType<VlcPlayerViewProps> = requireNativeViewManager('VlcPlayer');
+
+const nativeModule = requireNativeModule<VlcPlayerNativeModule>('VlcPlayer');
+
+/** The last few hundred libVLC log lines, for diagnosing a stream that will not start. */
+export function getVlcLog(): Promise<string[]> {
+  return nativeModule.getLog();
+}
+
+export function clearVlcLog(): void {
+  nativeModule.clearLog();
+}

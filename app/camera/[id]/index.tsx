@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CameraPlayer } from '@/components/CameraPlayer';
 import { StatusPill } from '@/components/StatusPill';
+import { VlcLogSheet } from '@/components/VlcLogSheet';
 import { IconButton, Segmented } from '@/components/ui';
 import { useReconnect } from '@/hooks/useReconnect';
 import { useShouldStream } from '@/hooks/useVisibility';
@@ -33,6 +34,7 @@ export default function ViewerScreen() {
   const [kind, setKind] = useState<StreamKind>('main');
   const [muted, setMuted] = useState(true);
   const [overlay, setOverlay] = useState(true);
+  const [logOpen, setLogOpen] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useFocusEffect(
@@ -157,6 +159,7 @@ export default function ViewerScreen() {
                 onPress={() => setMuted((m) => !m)}
               />
               <IconButton icon="refresh" label="Reconnect" background={colors.overlay} tint="#FFFFFF" style={styles.glass} onPress={reconnect.retryNow} />
+              <IconButton icon="document-text-outline" label="VLC log" background={colors.overlay} tint="#FFFFFF" style={styles.glass} onPress={() => setLogOpen(true)} />
               <IconButton
                 icon="settings-outline"
                 label="Edit camera"
@@ -169,6 +172,7 @@ export default function ViewerScreen() {
           </View>
         </>
       ) : null}
+      <VlcLogSheet visible={logOpen} title={camera.name} onClose={() => setLogOpen(false)} />
     </View>
   );
 }
