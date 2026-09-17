@@ -33,6 +33,7 @@ export function CameraPlayer({
   onStatusRef.current = onStatus;
 
   const detailRef = useRef<string | undefined>(undefined);
+  const lastStateRef = useRef<string>('none');
 
   const report = useCallback((status: PlayerStatus, detail?: string) => {
     if (statusRef.current === status && detailRef.current === detail && status !== 'error') return;
@@ -52,7 +53,7 @@ export function CameraPlayer({
     report('connecting');
     watchdog.current = setTimeout(() => {
       if (statusRef.current === 'connecting' || statusRef.current === 'buffering') {
-        report('error', 'No video received from the camera.');
+        report('error', `No video after ${Math.round(connectTimeoutMs / 1000)} s (VLC state: ${lastStateRef.current}).`);
       }
     }, connectTimeoutMs);
     return clearWatchdog;
@@ -65,10 +66,12 @@ export function CameraPlayer({
       contentFit={contentFit}
       style={[styles.view, style]}
       onPlaying={() => {
+        lastStateRef.current = 'playing';
         clearWatchdog();
         report('live');
       }}
       onBuffering={({ nativeEvent }) => {
+        lastStateRef.current = nativeEvent.state ?? lastStateRef.current;
         if (!nativeEvent.isBuffering || statusRef.current === 'live') return;
         report('buffering', nativeEvent.state === 'opening' ? 'Opening stream…' : 'Buffering…');
       }}

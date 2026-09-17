@@ -61,15 +61,19 @@ export function useReconnect(enabled: boolean): ReconnectState {
     [enabled, clearTimers, retryNow],
   );
 
+  const wasEnabled = useRef(enabled);
+
   useEffect(() => {
     if (!enabled) {
       clearTimers();
       setRetryIn(null);
       setStatus('stopped');
-    } else {
+    } else if (!wasEnabled.current) {
+      // Re-enabled after a pause: a fresh attempt. The initial mount already has one.
       failures.current = 0;
       retryNow();
     }
+    wasEnabled.current = enabled;
   }, [enabled, clearTimers, retryNow]);
 
   return { status, detail, retryIn, attempt, handleStatus, retryNow };

@@ -1,18 +1,25 @@
 import ExpoModulesCore
 import MobileVLCKit
 
-/// One libVLC player per mounted view. libVLC draws straight into a child UIView
+/// One libVLC player per stream. libVLC draws straight into a child UIView
 /// (`drawable`), so there is nothing to bridge for the video itself; only the
 /// player state comes back to JS as events.
+///
+/// `VLCMediaPlayer.stop()` is synchronous and waits for the network input to wind
+/// down, which can take seconds for a stream that never connected. Every teardown
+/// therefore happens on a background queue, and a new URI gets a new player
+/// instead of reusing one whose stop would block the main thread.
 class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
-  private let player: VLCMediaPlayer
+  private static let teardownQueue = DispatchQueue(label: "dev.gcamara.camerahub.vlc-teardown", qos: .utility)
+
+  private var player: VLCMediaPlayer?
   private let videoView = UIView()
   private var currentUri: String?
   private var paused = false
   private var muted = true
   private var cover = false
   /// True once the current media reached buffering/playing. libVLC reports the
-  /// `stopped` of the previous media asynchronously, so a stop that arrives before
+  /// `stopped` of a previous media asynchronously, so a stop that arrives before
   /// this flips is stale and must not be surfaced as the stream ending.
   private var hasStarted = false
 
@@ -23,15 +30,6 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   let onPaused = EventDispatcher()
 
   required init(appContext: AppContext? = nil) {
-    // TCP interleaving survives Wi-Fi packet loss far better than RTP over UDP,
-    // and a one second cache keeps the grid responsive without stuttering.
-    player = VLCMediaPlayer(options: [
-      "--rtsp-tcp",
-      "--network-caching=1000",
-      "--live-caching=1000",
-      "--drop-late-frames",
-      "--skip-frames",
-    ])
     super.init(appContext: appContext)
     backgroundColor = .black
     clipsToBounds = true
@@ -39,16 +37,36 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     videoView.frame = bounds
     videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     addSubview(videoView)
-    player.drawable = videoView
-    player.delegate = self
   }
 
   deinit {
+    tearDown(player)
+  }
+
+  private func makePlayer() -> VLCMediaPlayer {
+    // TCP interleaving survives Wi-Fi packet loss far better than RTP over UDP,
+    // and a one second cache keeps the grid responsive without stuttering.
+    let player = VLCMediaPlayer(options: [
+      "--rtsp-tcp",
+      "--network-caching=1000",
+      "--live-caching=1000",
+      "--drop-late-frames",
+      "--skip-frames",
+    ])
+    player.drawable = videoView
+    player.delegate = self
+    return player
+  }
+
+  /// Detaches on the main thread, then lets the blocking stop run elsewhere while
+  /// the closure keeps the player alive until libVLC is done with it.
+  private func tearDown(_ player: VLCMediaPlayer?) {
+    guard let player else { return }
     player.delegate = nil
-    if player.media != nil {
+    player.drawable = nil
+    Self.teardownQueue.async {
       player.stop()
     }
-    player.drawable = nil
   }
 
   // MARK: - Props
@@ -57,27 +75,30 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     guard uri != currentUri else { return }
     currentUri = uri
     hasStarted = false
-    if player.media != nil {
-      player.stop()
-    }
+    tearDown(player)
+    player = nil
     guard let uri, let url = URL(string: uri) else {
       onError(["message": "Invalid stream URL", "state": "invalid"])
       return
     }
-    player.media = VLCMedia(url: url)
-    player.audio?.isMuted = muted
+    let next = makePlayer()
+    player = next
+    next.media = VLCMedia(url: url)
+    next.audio?.isMuted = muted
+    applyCrop()
     if !paused {
-      player.play()
+      next.play()
     }
   }
 
   func setMuted(_ value: Bool) {
     muted = value
-    player.audio?.isMuted = value
+    player?.audio?.isMuted = value
   }
 
   func setPaused(_ value: Bool) {
     paused = value
+    guard let player else { return }
     if value {
       if player.isPlaying {
         player.pause()
@@ -101,6 +122,7 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   /// "cover" is expressed as a crop to the view's own aspect ratio; libVLC then
   /// scales the cropped picture to fill the drawable. "contain" clears the crop.
   private func applyCrop() {
+    guard let player else { return }
     let width = Int(bounds.width.rounded())
     let height = Int(bounds.height.rounded())
     guard cover, width > 0, height > 0 else {
@@ -113,6 +135,7 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   // MARK: - VLCMediaPlayerDelegate
 
   func mediaPlayerStateChanged(_ aNotification: Notification) {
+    guard let player else { return }
     switch player.state {
     case .opening:
       onBuffering(["isBuffering": true, "state": "opening"])
