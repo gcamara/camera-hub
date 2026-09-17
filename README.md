@@ -7,9 +7,13 @@ and keeps passwords in the iOS keychain.
 - **Grid** of live sub‑stream previews; tap for full screen (rotates to landscape), long‑press to edit.
 - **Add manually** with presets for Hikvision / Annke / HiLook, Dahua / Amcrest / Lorex / Imou, Reolink,
   TP‑Link Tapo, Wyze (RTSP firmware), Ubiquiti UniFi (standalone), Axis, Foscam, Uniview, Eufy — or paste
-  any `rtsp://` URL. A **Test stream** button plays the feed before you save.
-- **Find cameras** scans your subnet for ONVIF devices, signs in, lists their media profiles and reads the
-  real stream addresses from the camera.
+  any `rtsp://` URL. **Detect** asks the camera who made it (unauthenticated ONVIF, then the web login
+  page's fingerprint) and fills the brand, ports and paths without touching anything you typed. A
+  **Test stream** button plays the feed before you save.
+- **Find cameras** scans your subnet for ONVIF devices and for web logins that look like a known camera
+  brand, names the brand it recognised, signs in, lists media profiles and reads the real stream
+  addresses from the camera. Cameras without ONVIF get an **Add manually** shortcut with host and brand
+  filled in.
 - Full‑screen viewer: main/sub stream switch, mute, auto‑reconnect with back‑off.
 
 Cloud‑only cameras (Ring, Nest, Arlo, Blink, Eufy without RTSP) have no local stream and cannot be added.
@@ -89,6 +93,7 @@ modules/vlc-player/        local Expo module: VlcPlayerView (Swift + MobileVLCKi
 src/components/            CameraPlayer (adapter over VlcPlayerView), CameraTile, CameraForm, ui primitives
 src/hooks/                 useReconnect (back-off), useVisibility (focus + AppState gating)
 src/lib/brands.ts          RTSP path presets per brand
+src/lib/fingerprint.ts     brand detection: ONVIF manufacturer, web-page fingerprints, brand-only ports
 src/lib/rtsp.ts            URL build/parse/redact
 src/lib/onvif/             SOAP + WS-Security digest, XML parsing, device client, subnet discovery
 src/store/cameraStore.ts   zustand store; AsyncStorage for cameras, SecureStore for passwords
@@ -96,8 +101,11 @@ src/store/cameraStore.ts   zustand store; AsyncStorage for cameras, SecureStore 
 
 ## Notes and limits
 
-- ONVIF discovery probes HTTP ports 80, 8080, 2020 and 8000 across the /24 (about 30 s). WS‑Discovery
-  multicast would be faster but needs a UDP native module; not included yet.
+- Discovery probes ONVIF on ports 80, 8080, 2020 and 8000 and fetches the web page on port 80 across the
+  /24 (about 40 s). WS‑Discovery multicast would be faster but needs a UDP native module; not included yet.
+- Detection never uses HTTPS (cameras ship self-signed certificates that fetch rejects), so a camera whose
+  only web login is on 443 is recognised solely through ONVIF. Wyze's RTSP firmware has no web page or
+  ONVIF at all, so it cannot be detected; pick the preset by hand.
 - Streams are requested over RTSP‑interleaved TCP (`--rtsp-tcp`) with a 1 s network cache; TCP survives
   Wi‑Fi packet loss far better than RTP over UDP.
 - Tapo cameras: sign in with the *Camera Account* created in the Tapo app, not your TP‑Link login.

@@ -5,7 +5,7 @@ import { nonceFromBytes, type Sha1Base64 } from './soap';
 
 export { OnvifDevice, OnvifError, rewriteHost } from './client';
 export type { OnvifCredentials } from './client';
-export { DEFAULT_ONVIF_PORTS, scanHosts, subnetHosts, type DiscoveredDevice } from './discovery';
+export { DEFAULT_HTTP_PORTS, DEFAULT_ONVIF_PORTS, scanHosts, subnetHosts, type DiscoveredDevice } from './discovery';
 export { pickDefaultProfiles, type DeviceInformation, type OnvifProfile } from './parse';
 
 const sha1Base64: Sha1Base64 = (input) =>

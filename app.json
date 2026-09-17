@@ -7,7 +7,7 @@
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "backgroundColor": "#0B0F14",
+    "backgroundColor": "#0A0A0A",
     "ios": {
       "bundleIdentifier": "dev.gcamara.camerahub",
       "appleTeamId": "HUMYFK99PK",
@@ -24,7 +24,7 @@
     "android": {
       "package": "dev.gcamara.camerahub",
       "adaptiveIcon": {
-        "backgroundColor": "#0B0F14",
+        "backgroundColor": "#0A0A0A",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

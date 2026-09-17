@@ -7,6 +7,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } fr
 import { Button, Card, Chip, Field, Muted, SectionLabel } from '@/components/ui';
 import {
   createOnvifDevice,
+  DEFAULT_HTTP_PORTS,
   DEFAULT_ONVIF_PORTS,
   OnvifError,
   pickDefaultProfiles,
@@ -16,14 +17,20 @@ import {
   type DiscoveredDevice,
   type OnvifProfile,
 } from '@/lib/onvif';
-import { brandFromManufacturer } from '@/lib/brands';
+import { brandFromManufacturer, getBrand } from '@/lib/brands';
+import { detectBrand, type Detection } from '@/lib/fingerprint';
 import { probeOnvif } from '@/lib/onvif/discovery';
 import { parseRtspUrl } from '@/lib/rtsp';
-import type { CameraInput } from '@/lib/types';
+import type { BrandId, CameraInput } from '@/lib/types';
 import { useCameraStore } from '@/store/cameraStore';
 import { colors, font, spacing } from '@/theme';
 
 type Phase = 'idle' | 'scanning' | 'done';
+
+const TASKS_PER_HOST = DEFAULT_ONVIF_PORTS.length + DEFAULT_HTTP_PORTS.length;
+const DETECT_CONCURRENCY = 4;
+
+const nativeFetch = (url: string, init: RequestInit) => fetch(url, init);
 
 interface ConnectedState {
   info: DeviceInformation;
@@ -49,15 +56,60 @@ function parseCidr(value: string): { ip: string; prefix: number } | null {
   return { ip: match[1]!, prefix: match[2] ? Number(match[2]) : 24 };
 }
 
+function describeDevice(device: DiscoveredDevice, identifying: boolean): string {
+  if (device.brand) return `${getBrand(device.brand).label} · ${device.evidence}`;
+  if (identifying) return 'ONVIF device · identifying the brand…';
+  return device.authRequired ? 'ONVIF device · sign in to see model and streams' : 'ONVIF device';
+}
+
+function deviceFromDetection(host: string, detection: Detection): DiscoveredDevice {
+  const shared = { host, brand: detection.brand, evidence: detection.evidence };
+  return detection.onvifPort !== undefined
+    ? { kind: 'onvif', port: detection.onvifPort, authRequired: true, ...shared }
+    : { kind: 'http', port: DEFAULT_HTTP_PORTS[0]!, authRequired: false, ...shared };
+}
+
+function chooseBrand(manufacturer: string | undefined, fallback: BrandId | undefined): BrandId {
+  const fromOnvif = brandFromManufacturer(manufacturer);
+  return fromOnvif === 'onvif' && fallback ? fallback : fromOnvif;
+}
+
+interface WebDeviceCardProps {
+  device: DiscoveredDevice;
+  existingName?: string;
+  onAddManually: () => void;
+}
+
+function WebDeviceCard({ device, existingName, onAddManually }: WebDeviceCardProps) {
+  return (
+    <Card>
+      <View style={styles.cardHeader}>
+        <View style={styles.flex}>
+          <Text style={styles.cardTitle}>{device.host}</Text>
+          <Text style={styles.cardSubtitle}>
+            {existingName ? `Already added as “${existingName}”` : `Looks like a ${getBrand(device.brand ?? 'generic').label} camera (no ONVIF) · ${device.evidence}`}
+          </Text>
+        </View>
+        {existingName ? (
+          <Ionicons name="checkmark" size={22} color={colors.live} />
+        ) : (
+          <Button title="Add manually" variant="ghost" onPress={onAddManually} style={styles.smallButton} />
+        )}
+      </View>
+    </Card>
+  );
+}
+
 interface DeviceCardProps {
   device: DiscoveredDevice;
   existingName?: string;
+  identifying: boolean;
   expanded: boolean;
   onToggle: () => void;
   onAdded: () => void;
 }
 
-function DeviceCard({ device, existingName, expanded, onToggle, onAdded }: DeviceCardProps) {
+function DeviceCard({ device, existingName, identifying, expanded, onToggle, onAdded }: DeviceCardProps) {
   const addCamera = useCameraStore((state) => state.addCamera);
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
@@ -110,7 +162,7 @@ function DeviceCard({ device, existingName, expanded, onToggle, onAdded }: Devic
       }
       const input: CameraInput = {
         name: name.trim() || device.host,
-        brand: brandFromManufacturer(connected.info.manufacturer),
+        brand: chooseBrand(connected.info.manufacturer, device.brand),
         host: device.host,
         rtspPort: mainUri.port,
         username,
@@ -153,9 +205,7 @@ function DeviceCard({ device, existingName, expanded, onToggle, onAdded }: Devic
               ? `Already added as “${existingName}”`
               : connected
                 ? [connected.info.manufacturer, connected.info.model, connected.info.firmwareVersion && `firmware ${connected.info.firmwareVersion}`].filter(Boolean).join(' · ') || 'ONVIF device'
-                : device.authRequired
-                  ? 'ONVIF device · sign in to see model and streams'
-                  : 'ONVIF device'}
+                : describeDevice(device, identifying)}
           </Text>
         </View>
         {existingName ? (
@@ -214,6 +264,7 @@ export default function DiscoverScreen() {
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
+  const [identifying, setIdentifying] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState<string | null>(null);
   const [probing, setProbing] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
@@ -238,6 +289,25 @@ export default function DiscoverScreen() {
     setDevices((prev) => (prev.some((d) => d.host === device.host) ? prev : [...prev, device]));
   }, []);
 
+  const identify = useCallback(async (found: DiscoveredDevice[], signal: AbortSignal) => {
+    const queue = found.filter((device) => device.kind === 'onvif' && !device.brand);
+    setIdentifying((prev) => new Set([...prev, ...queue.map((device) => device.host)]));
+    async function worker(): Promise<void> {
+      while (queue.length > 0 && !signal.aborted) {
+        const device = queue.shift()!;
+        const result = await detectBrand(device.host, { fetch: nativeFetch, onvifPorts: [device.port], signal });
+        if (signal.aborted) return;
+        if (result) setDevices((prev) => prev.map((d) => (d.host === device.host ? { ...d, brand: result.brand, evidence: result.evidence } : d)));
+        setIdentifying((prev) => {
+          const next = new Set(prev);
+          next.delete(device.host);
+          return next;
+        });
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(DETECT_CONCURRENCY, queue.length) }, worker));
+  }, []);
+
   const scan = useCallback(async () => {
     const parsed = parseCidr(cidr);
     if (!parsed) {
@@ -251,20 +321,23 @@ export default function DiscoverScreen() {
     const controller = new AbortController();
     abort.current = controller;
     setDevices([]);
+    setIdentifying(new Set());
     setExpanded(null);
     setPhase('scanning');
-    setProgress({ done: 0, total: hosts.length * DEFAULT_ONVIF_PORTS.length });
+    setProgress({ done: 0, total: hosts.length * TASKS_PER_HOST });
     const found = await scanHosts(hosts, DEFAULT_ONVIF_PORTS, {
-      fetch: (url, init) => fetch(url, init),
+      fetch: nativeFetch,
       timeoutMs: 1500,
       concurrency: 48,
+      httpPorts: DEFAULT_HTTP_PORTS,
       signal: controller.signal,
       onProgress: (done, total) => setProgress({ done, total }),
     });
     if (controller.signal.aborted) return;
     setDevices(found);
     setPhase('done');
-  }, [cidr]);
+    await identify(found, controller.signal);
+  }, [cidr, identify]);
 
   const stop = useCallback(() => {
     abort.current?.abort();
@@ -283,22 +356,35 @@ export default function DiscoverScreen() {
     const ports = match[2] ? [Number(match[2])] : DEFAULT_ONVIF_PORTS;
     let hit: DiscoveredDevice | null = null;
     for (const port of ports) {
-      hit = await probeOnvif(host, port, (url, init) => fetch(url, init), 3000);
+      hit = await probeOnvif(host, port, nativeFetch, 3000);
       if (hit) break;
+    }
+    if (!hit) {
+      const detected = await detectBrand(host, { fetch: nativeFetch, onvifPorts: [] });
+      if (detected) hit = deviceFromDetection(host, detected);
     }
     setProbing(false);
     if (hit) {
       addDevice(hit);
       setExpanded(deviceKey(hit));
       if (phase === 'idle') setPhase('done');
+      if (!abort.current || abort.current.signal.aborted) abort.current = new AbortController();
+      await identify([hit], abort.current.signal);
     } else {
-      setNotice(`${host} did not answer as an ONVIF device on ${ports.join(', ')}.`);
+      setNotice(`${host} did not answer as an ONVIF device on ${ports.join(', ')}, and its web page is not one we recognise.`);
     }
-  }, [single, addDevice, phase]);
+  }, [single, addDevice, phase, identify]);
+
+  const openManual = useCallback(
+    (device: DiscoveredDevice) => {
+      router.replace({ pathname: '/add/manual', params: device.brand ? { host: device.host, brand: device.brand } : { host: device.host } });
+    },
+    [router],
+  );
 
   const percent = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
-  const hostsDone = Math.floor(progress.done / DEFAULT_ONVIF_PORTS.length);
-  const hostsTotal = Math.floor(progress.total / DEFAULT_ONVIF_PORTS.length);
+  const hostsDone = Math.floor(progress.done / TASKS_PER_HOST);
+  const hostsTotal = Math.floor(progress.total / TASKS_PER_HOST);
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -338,7 +424,7 @@ export default function DiscoverScreen() {
               <Button title={phase === 'idle' ? 'Scan' : 'Rescan'} icon="search" onPress={scan} style={styles.scanButton} />
             )}
           </View>
-          <Muted>ONVIF on ports {DEFAULT_ONVIF_PORTS.join(', ')} · about 30 s for a /24</Muted>
+          <Muted>ONVIF on ports {DEFAULT_ONVIF_PORTS.join(', ')}, web login on {DEFAULT_HTTP_PORTS.join(', ')} · about 40 s for a /24</Muted>
         </Card>
 
         {phase !== 'idle' ? (
@@ -348,11 +434,15 @@ export default function DiscoverScreen() {
             </SectionLabel>
             {devices.map((device) => {
               const key = deviceKey(device);
+              if (device.kind === 'http') {
+                return <WebDeviceCard key={key} device={device} existingName={existingByHost.get(device.host)} onAddManually={() => openManual(device)} />;
+              }
               return (
                 <DeviceCard
                   key={key}
                   device={device}
                   existingName={existingByHost.get(device.host)}
+                  identifying={identifying.has(device.host)}
                   expanded={expanded === key}
                   onToggle={() => setExpanded((current) => (current === key ? null : key))}
                   onAdded={() => router.dismissTo('/')}

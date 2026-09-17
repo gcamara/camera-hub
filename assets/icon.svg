@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <mask id="keyline" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#FFFFFF"/>
+      <circle cx="696" cy="328" r="124" fill="#000000"/>
+    </mask>
+  </defs>
+  <rect id="ground" width="1024" height="1024" fill="#0A0A0A"/>
+  <g id="mark">
+    <circle id="lens" cx="512" cy="512" r="260" fill="none" stroke="#FFB800" stroke-width="140" mask="url(#keyline)"/>
+    <circle id="live" cx="696" cy="328" r="88" fill="#3DDC84"/>
+  </g>
+</svg>

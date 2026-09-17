@@ -130,6 +130,10 @@ export function getBrand(id: BrandId): BrandPreset {
   return BRANDS.find((b) => b.id === id) ?? BRANDS[0]!;
 }
 
+export function isBrandId(value: string | undefined): value is BrandId {
+  return BRANDS.some((b) => b.id === value);
+}
+
 export function resolvePathTemplate(template: string, channel: number): string {
   const ch = Math.max(1, Math.floor(channel) || 1);
   return template.replace(/\{ch2\}/g, String(ch).padStart(2, '0')).replace(/\{ch\}/g, String(ch));

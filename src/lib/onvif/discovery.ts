@@ -1,18 +1,28 @@
+import { httpRootUrl, matchFingerprint, snapshotHttp } from '../fingerprint';
+import type { BrandId } from '../types';
 import { deviceServiceUrl, fetchWithTimeout, type FetchLike } from './client';
 import { bodies, buildEnvelope } from './soap';
 
 export const DEFAULT_ONVIF_PORTS = [80, 8080, 2020, 8000];
+/** Web logins fingerprinted during a scan so cameras without ONVIF still show up. */
+export const DEFAULT_HTTP_PORTS = [80];
 
 export interface DiscoveredDevice {
+  /** 'onvif' answered an ONVIF call; 'http' only has a web page that looks like a camera brand. */
+  kind: 'onvif' | 'http';
   host: string;
   port: number;
   authRequired: boolean;
+  brand?: BrandId;
+  evidence?: string;
 }
 
 export interface ScanOptions {
   fetch: FetchLike;
   timeoutMs?: number;
   concurrency?: number;
+  /** Extra ports whose web page is fingerprinted; none unless given. */
+  httpPorts?: number[];
   onProgress?: (done: number, total: number) => void;
   signal?: AbortSignal;
 }
@@ -69,21 +79,40 @@ export async function probeOnvif(
   } catch {
     return null;
   }
-  if (response.status === 401) return { host, port, authRequired: true };
+  if (response.status === 401) return { kind: 'onvif', host, port, authRequired: true };
   let text = '';
   try {
     text = await response.text();
   } catch {
     return null;
   }
-  if (/SystemDateAndTime/i.test(text)) return { host, port, authRequired: false };
-  if (/Envelope/i.test(text) && /Fault|NotAuthorized|Unauthorized/i.test(text)) return { host, port, authRequired: true };
+  if (/SystemDateAndTime/i.test(text)) return { kind: 'onvif', host, port, authRequired: false };
+  if (/Envelope/i.test(text) && /Fault|NotAuthorized|Unauthorized/i.test(text)) return { kind: 'onvif', host, port, authRequired: true };
   return null;
 }
 
+/** Lists a host only when its web page carries a known camera brand's fingerprint. */
+export async function probeHttp(host: string, port: number, fetchImpl: FetchLike, timeoutMs = 1500): Promise<DiscoveredDevice | null> {
+  const snapshot = await snapshotHttp(fetchImpl, httpRootUrl(host, port), timeoutMs);
+  const fingerprint = snapshot ? matchFingerprint(snapshot) : null;
+  if (!fingerprint) return null;
+  return { kind: 'http', host, port, authRequired: false, brand: fingerprint.brand, evidence: fingerprint.evidence };
+}
+
+/** One entry per host: ONVIF wins over a web page, and whichever came second contributes the brand it found. */
+function mergeDevices(existing: DiscoveredDevice | undefined, device: DiscoveredDevice): DiscoveredDevice {
+  if (!existing) return device;
+  const [primary, secondary] = existing.kind === 'http' && device.kind === 'onvif' ? [device, existing] : [existing, device];
+  if (primary.brand || !secondary.brand) return primary;
+  return { ...primary, brand: secondary.brand, evidence: secondary.evidence };
+}
+
 export async function scanHosts(hosts: string[], ports: number[], options: ScanOptions): Promise<DiscoveredDevice[]> {
-  const tasks: Array<{ host: string; port: number }> = [];
-  for (const host of hosts) for (const port of ports) tasks.push({ host, port });
+  const tasks: Array<{ host: string; port: number; kind: DiscoveredDevice['kind'] }> = [];
+  for (const host of hosts) {
+    for (const port of ports) tasks.push({ host, port, kind: 'onvif' });
+    for (const port of options.httpPorts ?? []) tasks.push({ host, port, kind: 'http' });
+  }
 
   const found = new Map<string, DiscoveredDevice>();
   const concurrency = Math.max(1, options.concurrency ?? 32);
@@ -94,8 +123,11 @@ export async function scanHosts(hosts: string[], ports: number[], options: ScanO
   async function worker(): Promise<void> {
     while (next < tasks.length && !options.signal?.aborted) {
       const task = tasks[next++]!;
-      const device = await probeOnvif(task.host, task.port, options.fetch, options.timeoutMs);
-      if (device && !found.has(device.host)) found.set(device.host, device);
+      const device =
+        task.kind === 'onvif'
+          ? await probeOnvif(task.host, task.port, options.fetch, options.timeoutMs)
+          : await probeHttp(task.host, task.port, options.fetch, options.timeoutMs);
+      if (device) found.set(device.host, mergeDevices(found.get(device.host), device));
       done += 1;
       options.onProgress?.(done, total);
     }

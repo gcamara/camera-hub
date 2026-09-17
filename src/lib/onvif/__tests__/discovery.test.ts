@@ -1,9 +1,16 @@
 import type { FetchLike } from '../client';
-import { intToIp, ipToInt, probeOnvif, scanHosts, subnetHosts } from '../discovery';
+import { intToIp, ipToInt, probeHttp, probeOnvif, scanHosts, subnetHosts } from '../discovery';
 
-function fakeResponse(status: number, text: string): Response {
-  return { ok: status >= 200 && status < 300, status, text: async () => text } as unknown as Response;
+function fakeResponse(status: number, text: string, headers: Record<string, string> = {}): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => text,
+    headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
+  } as unknown as Response;
 }
+
+const hikvisionIndex = '<!DOCTYPE html><html><head><title>index</title></head><body><script>window.location.href = "/doc/page/login.asp?_" + (new Date()).getTime();</script></body></html>';
 
 describe('ip helpers', () => {
   it('converts both ways', () => {
@@ -30,12 +37,12 @@ describe('probeOnvif', () => {
       expect(url).toBe('http://10.0.0.2:2020/onvif/device_service');
       return fakeResponse(200, '<Envelope><Body><GetSystemDateAndTimeResponse><SystemDateAndTime/></GetSystemDateAndTimeResponse></Body></Envelope>');
     };
-    expect(await probeOnvif('10.0.0.2', 2020, fetch)).toEqual({ host: '10.0.0.2', port: 2020, authRequired: false });
+    expect(await probeOnvif('10.0.0.2', 2020, fetch)).toEqual({ kind: 'onvif', host: '10.0.0.2', port: 2020, authRequired: false });
   });
 
   it('recognises devices that demand auth, via 401 or a SOAP fault', async () => {
-    expect(await probeOnvif('h', 80, async () => fakeResponse(401, ''))).toEqual({ host: 'h', port: 80, authRequired: true });
-    expect(await probeOnvif('h', 80, async () => fakeResponse(400, '<Envelope><Fault>NotAuthorized</Fault></Envelope>'))).toEqual({ host: 'h', port: 80, authRequired: true });
+    expect(await probeOnvif('h', 80, async () => fakeResponse(401, ''))).toEqual({ kind: 'onvif', host: 'h', port: 80, authRequired: true });
+    expect(await probeOnvif('h', 80, async () => fakeResponse(400, '<Envelope><Fault>NotAuthorized</Fault></Envelope>'))).toEqual({ kind: 'onvif', host: 'h', port: 80, authRequired: true });
   });
 
   it('ignores ordinary web servers and unreachable hosts', async () => {
@@ -45,6 +52,29 @@ describe('probeOnvif', () => {
         throw new TypeError('Network request failed');
       }),
     ).toBeNull();
+  });
+});
+
+describe('probeHttp', () => {
+  it('lists a host whose web page carries a brand fingerprint', async () => {
+    const fetch: FetchLike = async (url, init) => {
+      expect(url).toBe('http://10.0.0.4/');
+      expect(init.method).toBe('GET');
+      return fakeResponse(200, hikvisionIndex, { server: 'App-webs/' });
+    };
+    expect(await probeHttp('10.0.0.4', 80, fetch)).toEqual({
+      kind: 'http',
+      host: '10.0.0.4',
+      port: 80,
+      authRequired: false,
+      brand: 'hikvision',
+      evidence: 'matched the Hikvision web server header',
+    });
+  });
+
+  it('ignores web servers that are not cameras', async () => {
+    expect(await probeHttp('h', 80, async () => fakeResponse(200, '<html><title>Router admin</title></html>'))).toBeNull();
+    expect(await probeHttp('h', 8080, async () => fakeResponse(200, '<html><title>Router admin</title></html>'))).toBeNull();
   });
 });
 
@@ -70,11 +100,36 @@ describe('scanHosts', () => {
     });
 
     expect(found).toEqual([
-      { host: '10.0.0.1', port: 8080, authRequired: true },
-      { host: '10.0.0.3', port: 80, authRequired: false },
+      { kind: 'onvif', host: '10.0.0.1', port: 8080, authRequired: true },
+      { kind: 'onvif', host: '10.0.0.3', port: 80, authRequired: false },
     ]);
     expect(peak).toBeLessThanOrEqual(2);
     expect(progress).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('adds one web-page task per host, lists HTTP-only cameras and folds a fingerprint into an ONVIF hit', async () => {
+    const fetch: FetchLike = async (url, init) => {
+      if (init.method === 'GET') {
+        if (url === 'http://10.0.0.5/') return fakeResponse(200, '<html><head><title>WEB SERVICE</title></head></html>');
+        if (url === 'http://10.0.0.6/') return fakeResponse(200, hikvisionIndex);
+        throw new Error('down');
+      }
+      if (url === 'http://10.0.0.6:8080/onvif/device_service') return fakeResponse(401, '');
+      throw new Error('down');
+    };
+    const progress: number[] = [];
+    const found = await scanHosts(['10.0.0.5', '10.0.0.6', '10.0.0.7'], [8080], {
+      fetch,
+      httpPorts: [80],
+      concurrency: 1,
+      onProgress: (done, total) => progress.push(total - done),
+    });
+
+    expect(found).toEqual([
+      { kind: 'http', host: '10.0.0.5', port: 80, authRequired: false, brand: 'dahua', evidence: 'matched the Dahua login page' },
+      { kind: 'onvif', host: '10.0.0.6', port: 8080, authRequired: true, brand: 'hikvision', evidence: 'matched the Hikvision login page' },
+    ]);
+    expect(progress).toEqual([5, 4, 3, 2, 1, 0]);
   });
 
   it('stops early when aborted', async () => {

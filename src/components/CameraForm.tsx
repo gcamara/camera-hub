@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { CameraPlayer } from './CameraPlayer';
@@ -6,6 +6,7 @@ import { StatusPill } from './StatusPill';
 import { Button, Chip, Field, Muted, SectionLabel } from './ui';
 import { useReconnect } from '@/hooks/useReconnect';
 import { BRANDS, getBrand, resolvePathTemplate } from '@/lib/brands';
+import { describeDetection, detectBrand, type Detection } from '@/lib/fingerprint';
 import { buildStreamUrl, normalizePath, parseRtspUrl, redactUrl } from '@/lib/rtsp';
 import type { BrandId, Camera, CameraInput } from '@/lib/types';
 import { colors, font, spacing } from '@/theme';
@@ -22,15 +23,22 @@ export interface CameraFormValues {
   subPath: string;
 }
 
+/** Fields a caller may pre-fill for a new camera, e.g. the host and brand a scan already found. */
+export type CameraPrefill = Partial<CameraInput>;
+
 interface CameraFormProps {
-  initial?: Camera;
+  initial?: Camera | CameraPrefill;
   initialPassword?: string;
   submitLabel: string;
   onSubmit: (input: CameraInput, password: string) => Promise<void>;
   footer?: ReactNode;
 }
 
-function valuesFrom(camera: Camera | undefined, password: string): CameraFormValues {
+function isSavedCamera(initial: Camera | CameraPrefill | undefined): initial is Camera {
+  return initial !== undefined && 'id' in initial;
+}
+
+function valuesFrom(camera: CameraPrefill | undefined, password: string): CameraFormValues {
   const brand = getBrand(camera?.brand ?? 'generic');
   return {
     name: camera?.name ?? '',
@@ -75,9 +83,16 @@ export function toCameraInput(values: CameraFormValues, onvif?: Camera['onvif'])
 }
 
 export function CameraForm({ initial, initialPassword = '', submitLabel, onSubmit, footer }: CameraFormProps) {
+  const editing = isSavedCamera(initial);
   const [values, setValues] = useState<CameraFormValues>(() => valuesFrom(initial, initialPassword));
   const [errors, setErrors] = useState<Errors>({});
-  const [pathsTouched, setPathsTouched] = useState(initial !== undefined);
+  const [pathsTouched, setPathsTouched] = useState(editing || initial?.mainPath !== undefined);
+  const [brandTouched, setBrandTouched] = useState(editing);
+  const [portTouched, setPortTouched] = useState(editing);
+  const [onvifPort, setOnvifPort] = useState<number | undefined>(initial?.onvif?.port);
+  const [detecting, setDetecting] = useState(false);
+  const [detection, setDetection] = useState<Detection | null | undefined>();
+  const detectAbort = useRef<AbortController | null>(null);
   const [pasteUrl, setPasteUrl] = useState('');
   const [pasteError, setPasteError] = useState<string | undefined>();
   const [testing, setTesting] = useState(false);
@@ -86,24 +101,54 @@ export function CameraForm({ initial, initialPassword = '', submitLabel, onSubmi
 
   const brand = getBrand(values.brand);
 
+  useEffect(() => () => detectAbort.current?.abort(), []);
+
   const set = useCallback(<K extends keyof CameraFormValues>(key: K, value: CameraFormValues[K]) => {
     setValues((prev) => ({ ...prev, [key]: value }));
     setErrors((prev) => (prev[key] ? { ...prev, [key]: undefined } : prev));
   }, []);
 
-  const selectBrand = useCallback(
-    (id: BrandId) => {
+  const applyBrand = useCallback(
+    (id: BrandId, keepPort: boolean) => {
       const preset = getBrand(id);
       setValues((prev) => ({
         ...prev,
         brand: id,
-        rtspPort: String(preset.rtspPort),
+        rtspPort: keepPort ? prev.rtspPort : String(preset.rtspPort),
         mainPath: pathsTouched ? prev.mainPath : preset.mainPath,
         subPath: pathsTouched ? prev.subPath : preset.subPath,
       }));
     },
     [pathsTouched],
   );
+
+  const selectBrand = useCallback(
+    (id: BrandId) => {
+      setBrandTouched(true);
+      applyBrand(id, false);
+    },
+    [applyBrand],
+  );
+
+  const detect = useCallback(async () => {
+    const host = values.host.trim();
+    if (!/^[A-Za-z0-9.-]+$/.test(host)) {
+      setErrors((prev) => ({ ...prev, host: 'Enter an IP address or hostname.' }));
+      return;
+    }
+    detectAbort.current?.abort();
+    const controller = new AbortController();
+    detectAbort.current = controller;
+    setDetecting(true);
+    setDetection(undefined);
+    const result = await detectBrand(host, { fetch: (url, init) => fetch(url, init), signal: controller.signal });
+    if (controller.signal.aborted) return;
+    setDetecting(false);
+    setDetection(result);
+    if (!result) return;
+    if (result.onvifPort !== undefined) setOnvifPort(result.onvifPort);
+    if (!brandTouched) applyBrand(result.brand, portTouched);
+  }, [values.host, brandTouched, portTouched, applyBrand]);
 
   const applyPastedUrl = useCallback(() => {
     const parts = parseRtspUrl(pasteUrl);
@@ -113,6 +158,8 @@ export function CameraForm({ initial, initialPassword = '', submitLabel, onSubmi
     }
     setPasteError(undefined);
     setPathsTouched(true);
+    setBrandTouched(true);
+    setPortTouched(true);
     setValues((prev) => ({
       ...prev,
       brand: 'generic',
@@ -145,11 +192,12 @@ export function CameraForm({ initial, initialPassword = '', submitLabel, onSubmi
     if (Object.keys(nextErrors).length > 0) return;
     setSaving(true);
     try {
-      await onSubmit(toCameraInput(values, initial?.onvif), values.password);
+      const onvif = onvifPort === undefined ? initial?.onvif : { ...initial?.onvif, port: onvifPort };
+      await onSubmit(toCameraInput(values, onvif), values.password);
     } finally {
       setSaving(false);
     }
-  }, [values, onSubmit, initial]);
+  }, [values, onSubmit, initial, onvifPort]);
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -166,24 +214,35 @@ export function CameraForm({ initial, initialPassword = '', submitLabel, onSubmi
           {brand.hint ? <Muted>{brand.hint}</Muted> : null}
         </View>
 
-        <View style={styles.row}>
-          <Field
-            label="Host or IP"
-            value={values.host}
-            onChangeText={(t) => set('host', t)}
-            placeholder="192.168.1.20"
-            keyboardType="url"
-            error={errors.host}
-            containerStyle={styles.flex}
-          />
-          <Field
-            label="Port"
-            value={values.rtspPort}
-            onChangeText={(t) => set('rtspPort', t)}
-            keyboardType="number-pad"
-            error={errors.rtspPort}
-            containerStyle={styles.port}
-          />
+        <View style={styles.section}>
+          <View style={styles.row}>
+            <Field
+              label="Host or IP"
+              value={values.host}
+              onChangeText={(t) => {
+                setDetection(undefined);
+                setOnvifPort(undefined);
+                set('host', t);
+              }}
+              placeholder="192.168.1.20"
+              keyboardType="url"
+              error={errors.host}
+              containerStyle={styles.flex}
+            />
+            <Button title="Detect" variant="secondary" loading={detecting} disabled={values.host.trim() === ''} onPress={detect} style={styles.detectButton} />
+            <Field
+              label="Port"
+              value={values.rtspPort}
+              onChangeText={(t) => {
+                setPortTouched(true);
+                set('rtspPort', t);
+              }}
+              keyboardType="number-pad"
+              error={errors.rtspPort}
+              containerStyle={styles.port}
+            />
+          </View>
+          {detecting ? <Muted>Asking the camera who made it…</Muted> : detection !== undefined ? <Muted>{describeDetection(detection)}</Muted> : null}
         </View>
 
         <View style={styles.row}>
@@ -311,7 +370,8 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, gap: spacing.xl, paddingBottom: spacing.xxl * 2 },
   section: { gap: spacing.md },
   row: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
-  port: { width: 96 },
+  port: { width: 88 },
+  detectButton: { minHeight: 48, minWidth: 84, marginTop: 22, paddingHorizontal: spacing.md },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   channelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   channelLabel: { fontSize: font.small, color: colors.muted },
