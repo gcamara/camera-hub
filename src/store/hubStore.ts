@@ -13,6 +13,8 @@ interface StoredHub {
   hub: HubInfo | null;
   cameras: HubCamera[];
   etag: string | null;
+  /** Hub camera ids this phone keeps out of its own grid; see `setPreviewOff`. */
+  previewOff: string[];
 }
 
 interface HubState {
@@ -29,10 +31,18 @@ interface HubState {
   failure: string | null;
   /** Entries the last answer carried that this app could not read. */
   skipped: number;
+  /** Hub camera ids this phone keeps out of its grid, whatever the hub says. */
+  previewOff: string[];
   refreshing: boolean;
   hydrate: () => Promise<void>;
   connect: (baseUrl: string, token: string) => Promise<HubResult>;
   refresh: () => Promise<HubResult | null>;
+  /**
+   * This phone's own preview choice for one hub camera. It can only subtract: a camera
+   * the hub keeps off stays off, because only the hub knows a camera cannot take a
+   * second viewer. Turning one off here is a preference and never leaves the phone.
+   */
+  setPreviewOff: (hubCameraId: string, off: boolean) => Promise<void>;
   disconnect: () => Promise<void>;
 }
 
@@ -50,6 +60,7 @@ export const useHubStore = create<HubState>((set, get) => ({
   reachable: true,
   failure: null,
   skipped: 0,
+  previewOff: [],
   refreshing: false,
 
   hydrate: async () => {
@@ -69,6 +80,7 @@ export const useHubStore = create<HubState>((set, get) => ({
       hub: stored?.hub ?? null,
       cameras: stored?.cameras ?? [],
       etag: stored?.etag ?? null,
+      previewOff: stored?.previewOff ?? [],
       // Optimistic until the first refresh answers: the cached URLs are usually still good,
       // and marking every tile unreachable on launch would be a lie most of the time.
       reachable: true,
@@ -86,14 +98,17 @@ export const useHubStore = create<HubState>((set, get) => ({
       return result;
     }
     const { snapshot } = result;
+    // Overrides are keyed by the hub's own camera ids, so they mean nothing on a different hub.
+    const previewOff = normalized === get().baseUrl ? get().previewOff : [];
     await secrets.set(TOKEN_KEY, token);
-    await persist({ baseUrl: normalized, hub: snapshot.hub, cameras: snapshot.cameras, etag: snapshot.etag });
+    await persist({ baseUrl: normalized, hub: snapshot.hub, cameras: snapshot.cameras, etag: snapshot.etag, previewOff });
     set({
       baseUrl: normalized,
       token,
       hub: snapshot.hub,
       cameras: snapshot.cameras,
       etag: snapshot.etag,
+      previewOff,
       reachable: true,
       failure: null,
       skipped: snapshot.skipped,
@@ -109,7 +124,13 @@ export const useHubStore = create<HubState>((set, get) => ({
     const result = await fetchHubCameras({ baseUrl, token, etag });
     if (result.outcome === 'ok') {
       const { snapshot } = result;
-      await persist({ baseUrl, hub: snapshot.hub, cameras: snapshot.cameras, etag: snapshot.etag });
+      await persist({
+        baseUrl,
+        hub: snapshot.hub,
+        cameras: snapshot.cameras,
+        etag: snapshot.etag,
+        previewOff: get().previewOff,
+      });
       set({
         hub: snapshot.hub,
         cameras: snapshot.cameras,
@@ -134,6 +155,14 @@ export const useHubStore = create<HubState>((set, get) => ({
     return result;
   },
 
+  setPreviewOff: async (hubCameraId, off) => {
+    const { previewOff, baseUrl, hub, cameras, etag } = get();
+    const next = off ? [...new Set([...previewOff, hubCameraId])] : previewOff.filter((id) => id !== hubCameraId);
+    if (next.length === previewOff.length && off) return;
+    set({ previewOff: next });
+    await persist({ baseUrl, hub, cameras, etag, previewOff: next });
+  },
+
   disconnect: async () => {
     await AsyncStorage.removeItem(HUB_KEY);
     try {
@@ -147,6 +176,7 @@ export const useHubStore = create<HubState>((set, get) => ({
       hub: null,
       cameras: [],
       etag: null,
+      previewOff: [],
       reachable: true,
       failure: null,
       skipped: 0,

@@ -11,8 +11,9 @@ import { useHubRefresh } from '@/hooks/useHubRefresh';
 import { usePlayableCameras } from '@/hooks/usePlayable';
 import { useShouldStream } from '@/hooks/useVisibility';
 import { getBrand } from '@/lib/brands';
-import { shouldPreview, type PlayableCamera } from '@/lib/playable';
+import { hubCameraId, shouldPreview, type PlayableCamera } from '@/lib/playable';
 import { useCameraStore } from '@/store/cameraStore';
+import { useHubStore } from '@/store/hubStore';
 import { colors, font, radius, spacing } from '@/theme';
 
 function KeepAwakeWhileViewing() {
@@ -34,6 +35,7 @@ export default function CamerasScreen() {
   const settings = useCameraStore((state) => state.settings);
   const updateSettings = useCameraStore((state) => state.updateSettings);
   const removeCamera = useCameraStore((state) => state.removeCamera);
+  const setPreviewOff = useHubStore((state) => state.setPreviewOff);
   const cameras = usePlayableCameras();
   const streaming = useShouldStream();
   const live = streaming && settings.livePreviews;
@@ -56,12 +58,27 @@ export default function CamerasScreen() {
           `${brandLabel} · served by ${camera.origin}`,
           'This camera is managed by the hub. Add, rename or remove it there.',
         ];
+        if (camera.previewVetoed) {
+          lines.push('The hub keeps this camera out of the grid, so it only plays full screen.');
+        }
         if (camera.unreachable) {
           lines.push(
             'The hub is not answering, so this is its cached entry. The app has no credentials of its own for this camera and cannot reach it without the hub.',
           );
         }
-        Alert.alert(camera.name, lines.join('\n\n'), [{ text: 'Close', style: 'cancel' }]);
+        const hubId = hubCameraId(camera.id);
+        Alert.alert(camera.name, lines.join('\n\n'), [
+          // Only offered when the hub allows a preview at all; this phone may turn one off, never on.
+          ...(camera.previewVetoed
+            ? []
+            : [
+                {
+                  text: camera.livePreview ? 'Turn preview off here' : 'Turn preview on here',
+                  onPress: () => void setPreviewOff(hubId, camera.livePreview),
+                },
+              ]),
+          { text: 'Close', style: 'cancel' as const },
+        ]);
         return;
       }
       Alert.alert(camera.name, undefined, [
@@ -78,7 +95,7 @@ export default function CamerasScreen() {
         { text: 'Cancel', style: 'cancel' },
       ]);
     },
-    [router, removeCamera],
+    [router, removeCamera, setPreviewOff],
   );
 
   const header = (

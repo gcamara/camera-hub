@@ -11,13 +11,16 @@ export function usePlayableCameras(): PlayableCamera[] {
   const hub = useHubStore((state) => state.hub);
   const hubCameras = useHubStore((state) => state.cameras);
   const reachable = useHubStore((state) => state.reachable);
+  const previewOff = useHubStore((state) => state.previewOff);
 
   return useMemo(
     () => [
       ...cameras.map((camera) => playableFromCamera(camera, passwords[camera.id] ?? '')),
-      ...(hub ? hubCameras.map((camera) => playableFromHub(camera, hub, reachable)) : []),
+      ...(hub
+        ? hubCameras.map((camera) => playableFromHub(camera, hub, reachable, previewOff.includes(camera.id)))
+        : []),
     ],
-    [cameras, passwords, hub, hubCameras, reachable],
+    [cameras, passwords, hub, hubCameras, reachable, previewOff],
   );
 }
 

@@ -55,6 +55,7 @@ beforeEach(async () => {
     hub: null,
     cameras: [],
     etag: null,
+    previewOff: [],
     reachable: true,
     failure: null,
     refreshing: false,
@@ -156,6 +157,39 @@ describe('hydrate and disconnect', () => {
     expect(state.baseUrl).toBe('http://hub.lan:8080');
     expect(state.cameras).toEqual([cached]);
     expect(state.token).toBe('placeholder-token');
+  });
+
+  it('remembers a preview this phone turned off, and forgets it again', async () => {
+    useHubStore.setState({ baseUrl: 'http://hub.lan:8080', cameras: [cached], hub: payload.hub, etag: 'W/"3"' });
+
+    await useHubStore.getState().setPreviewOff('garage', true);
+    expect(useHubStore.getState().previewOff).toEqual(['garage']);
+    const stored = JSON.parse((await AsyncStorage.getItem('camerahub.hub')) ?? '{}');
+    expect(stored.previewOff).toEqual(['garage']);
+
+    await useHubStore.getState().setPreviewOff('garage', true);
+    expect(useHubStore.getState().previewOff).toEqual(['garage']);
+
+    await useHubStore.getState().setPreviewOff('garage', false);
+    expect(useHubStore.getState().previewOff).toEqual([]);
+  });
+
+  it('drops the overrides when a different hub is connected', async () => {
+    useHubStore.setState({ baseUrl: 'http://old-hub.lan:8080', previewOff: ['garage'] });
+    fetchMock.mockResolvedValueOnce(answer(200, payload, 'W/"9"'));
+
+    await useHubStore.getState().connect('http://hub.lan:8080', 'placeholder-token');
+
+    expect(useHubStore.getState().previewOff).toEqual([]);
+  });
+
+  it('keeps the overrides when reconnecting to the same hub', async () => {
+    useHubStore.setState({ baseUrl: 'http://hub.lan:8080', previewOff: ['garage'] });
+    fetchMock.mockResolvedValueOnce(answer(200, payload, 'W/"9"'));
+
+    await useHubStore.getState().connect('http://hub.lan:8080', 'placeholder-token');
+
+    expect(useHubStore.getState().previewOff).toEqual(['garage']);
   });
 
   it('clears everything on disconnect', async () => {

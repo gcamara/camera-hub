@@ -18,7 +18,13 @@ export interface PlayableCamera {
   mainUrl: string;
   /** Empty when there is only one quality; the grid then plays the main stream. */
   subUrl: string;
+  /** The effective answer, after both the hub's setting and this phone's own. */
   livePreview: boolean;
+  /**
+   * The hub itself keeps this camera out of the grid — usually because it tolerates a
+   * single viewer — and this phone cannot switch it back on. A phone may only subtract.
+   */
+  previewVetoed: boolean;
   /**
    * The hub did not answer. A hub camera has no fallback: the app holds none of its
    * credentials, only go2rtc's, so there is nothing to connect to directly.
@@ -33,6 +39,11 @@ export function hubPlayableId(hubCameraId: string): string {
   return `${HUB_PREFIX}${hubCameraId}`;
 }
 
+/** The hub's own id again, for talking back to the hub store about one of its cameras. */
+export function hubCameraId(playableId: string): string {
+  return playableId.startsWith(HUB_PREFIX) ? playableId.slice(HUB_PREFIX.length) : playableId;
+}
+
 export function playableFromCamera(camera: Camera, password: string): PlayableCamera {
   return {
     id: camera.id,
@@ -43,11 +54,22 @@ export function playableFromCamera(camera: Camera, password: string): PlayableCa
     mainUrl: buildStreamUrl(camera, password, 'main'),
     subUrl: hasSubStream(camera) ? buildStreamUrl(camera, password, 'sub') : '',
     livePreview: camera.livePreview,
+    previewVetoed: false,
     unreachable: false,
   };
 }
 
-export function playableFromHub(camera: HubCamera, hub: HubInfo, reachable: boolean): PlayableCamera {
+/**
+ * `previewOff` is this phone's own choice, which may only turn a preview off: whether a
+ * camera can afford a second viewer is the hub's to know, but whether you want it on
+ * your grid is yours, and the two answers belong to different devices.
+ */
+export function playableFromHub(
+  camera: HubCamera,
+  hub: HubInfo,
+  reachable: boolean,
+  previewOff: boolean,
+): PlayableCamera {
   return {
     id: hubPlayableId(camera.id),
     name: camera.name,
@@ -56,7 +78,8 @@ export function playableFromHub(camera: HubCamera, hub: HubInfo, reachable: bool
     source: 'hub',
     mainUrl: camera.mainUrl,
     subUrl: camera.subUrl,
-    livePreview: camera.livePreview,
+    livePreview: camera.livePreview && !previewOff,
+    previewVetoed: !camera.livePreview,
     unreachable: !reachable,
   };
 }

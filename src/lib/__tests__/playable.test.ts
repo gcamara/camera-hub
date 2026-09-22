@@ -49,7 +49,7 @@ describe('playableFromCamera', () => {
 
 describe('playableFromHub', () => {
   it('namespaces the hub id and shows the hub as the origin', () => {
-    const playable = playableFromHub(hubCamera, hub, true);
+    const playable = playableFromHub(hubCamera, hub, true, false);
     expect(playable.id).toBe('hub-garage');
     expect(playable.origin).toBe('Attic hub');
     expect(playable.source).toBe('hub');
@@ -57,19 +57,34 @@ describe('playableFromHub', () => {
   });
 
   it('marks the camera unreachable when the hub did not answer', () => {
-    expect(playableFromHub(hubCamera, hub, false).unreachable).toBe(true);
+    expect(playableFromHub(hubCamera, hub, false, false).unreachable).toBe(true);
+  });
+
+  it("lets this phone turn a preview off without claiming the hub did", () => {
+    const off = playableFromHub(hubCamera, hub, true, true);
+    expect(off.livePreview).toBe(false);
+    expect(off.previewVetoed).toBe(false);
+  });
+
+  it('keeps a preview the hub vetoed off, whatever this phone says', () => {
+    const vetoed = { ...hubCamera, livePreview: false };
+    for (const previewOff of [false, true]) {
+      const playable = playableFromHub(vetoed, hub, true, previewOff);
+      expect(playable.livePreview).toBe(false);
+      expect(playable.previewVetoed).toBe(true);
+    }
   });
 });
 
 describe('previewUrl', () => {
   it('prefers the sub stream and falls back to the main one', () => {
-    expect(previewUrl(playableFromHub(hubCamera, hub, true))).toBe(hubCamera.subUrl);
-    expect(previewUrl(playableFromHub({ ...hubCamera, subUrl: '' }, hub, true))).toBe(hubCamera.mainUrl);
+    expect(previewUrl(playableFromHub(hubCamera, hub, true, false))).toBe(hubCamera.subUrl);
+    expect(previewUrl(playableFromHub({ ...hubCamera, subUrl: '' }, hub, true, false))).toBe(hubCamera.mainUrl);
   });
 });
 
 describe('shouldPreview', () => {
-  const playable = playableFromHub(hubCamera, hub, true);
+  const playable = playableFromHub(hubCamera, hub, true, false);
 
   it('streams only when the global switch and the camera agree', () => {
     const matrix: Array<[boolean, boolean, boolean]> = [
