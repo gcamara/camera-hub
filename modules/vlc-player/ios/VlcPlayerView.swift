@@ -134,11 +134,11 @@ class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     }
     note("restart \(Self.describe(uri)) muted=\(muted) paused=\(paused) \(Int(bounds.width))x\(Int(bounds.height))")
     let media = VLCMedia(url: url)
-    // TCP interleaving survives Wi-Fi packet loss far better than RTP over UDP,
-    // and a one second cache keeps the grid responsive without stuttering.
-    // Muted views drop audio at the source: mute/volume calls before play() are
-    // no-ops in libVLC because the audio output does not exist yet.
-    var options = [":rtsp-tcp", ":network-caching=1000", ":live-caching=1000"]
+    // RTSP over TCP and the one second cache are set on the shared library itself (see
+    // VlcPlayerModule): as media options VLCKit ignores `:rtsp-tcp`. Only what differs
+    // per view belongs here. Muted views drop audio at the source: mute/volume calls
+    // before play() are no-ops in libVLC because the audio output does not exist yet.
+    var options: [String] = []
     if muted {
       options.append(":no-audio")
     }

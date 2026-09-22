@@ -25,7 +25,17 @@ final class VlcLogSink: NSObject, VLCLogging {
     case .info: tag = "I"
     default: tag = "D"
     }
-    append("\(tag) \(context?.module ?? "vlc"): \(message)")
+    append("\(tag) \(context?.module ?? "vlc"): \(Self.redact(message))")
+  }
+
+  /**
+   * libVLC prints the stream URL, credentials included, in several of its own lines and in
+   * three shapes — `rtsp://user:pass@`, `` path `user:pass@ `` and `location='user:pass@` —
+   * and this log is meant to be shared. Any `user:password@` is masked on the way in,
+   * whoever wrote the line, without depending on what precedes it.
+   */
+  static func redact(_ text: String) -> String {
+    text.replacingOccurrences(of: "[^\\s'`\"/@:]+:[^\\s'`\"/@]+@", with: "***@", options: .regularExpression)
   }
 
   /// The player view's own lifecycle, in the same log as libVLC's lines.
