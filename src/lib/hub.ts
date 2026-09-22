@@ -70,11 +70,11 @@ export function sessionEndpoint(baseUrl: string): string {
   return `${normalizeBaseUrl(baseUrl)}/api/session`;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+export function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
-function asString(value: unknown): string {
+export function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
@@ -150,7 +150,7 @@ function readEtag(response: Response): string | null {
   }
 }
 
-function describeFailure(error: unknown, timeoutMs: number): string {
+export function describeFailure(error: unknown, timeoutMs: number): string {
   if (error instanceof Error) {
     if (error.name === 'AbortError') return `the hub did not answer within ${Math.round(timeoutMs / 1000)} s`;
     if (error.message) return error.message;

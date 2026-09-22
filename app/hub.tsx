@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { ScanNetwork } from '@/components/ScanNetwork';
 import { Button, Card, Field, Muted, SectionLabel } from '@/components/ui';
 import { confirm } from '@/lib/dialogs';
 import { camerasEndpoint, describeHubResult } from '@/lib/hub';
@@ -126,6 +127,7 @@ function ConnectedHub() {
         {sessionFailure ? <Text style={styles.error}>{sessionFailure}</Text> : null}
         <Button title="Refresh now" variant="secondary" icon="refresh" loading={refreshing} onPress={() => void refresh()} />
       </Card>
+      <ScanNetwork />
       <Card>
         <SectionLabel>Disconnect</SectionLabel>
         <Muted>
