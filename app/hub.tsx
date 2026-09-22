@@ -1,8 +1,10 @@
 import { useCallback, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Button, Card, Field, Muted, SectionLabel } from '@/components/ui';
+import { confirm } from '@/lib/dialogs';
 import { camerasEndpoint, describeHubResult } from '@/lib/hub';
+import { isWeb } from '@/lib/platform';
 import { useHubStore } from '@/store/hubStore';
 import { colors, font, spacing } from '@/theme';
 
@@ -30,8 +32,9 @@ function ConnectForm() {
       <Card>
         <SectionLabel>Connect to hub</SectionLabel>
         <Muted>
-          The hub keeps the camera list and restreams every camera, so this phone plays the hub's streams and never
-          learns your cameras' own passwords.
+          {isWeb
+            ? "The hub keeps the camera list and restreams every camera. This browser plays what the hub serves it and nothing else, and never learns your cameras' own passwords."
+            : "The hub keeps the camera list and restreams every camera, so this phone plays the hub's streams and never learns your cameras' own passwords."}
         </Muted>
         <Field
           label="Hub address"
@@ -61,8 +64,9 @@ function ConnectForm() {
       <Card>
         <SectionLabel>Away from home</SectionLabel>
         <Muted>
-          The hub is reachable wherever its tailnet is. Cameras on this phone stay local either way, and the hub's
-          cameras need the hub: without it, this app has no credentials of its own for them.
+          {isWeb
+            ? 'The hub is reachable wherever its tailnet is. Every camera here comes through it: without the hub, this browser has nothing of its own to play.'
+            : "The hub is reachable wherever its tailnet is. Cameras on this phone stay local either way, and the hub's cameras need the hub: without it, this app has no credentials of its own for them."}
         </Muted>
       </Card>
     </>
@@ -76,15 +80,21 @@ function ConnectedHub() {
   const reachable = useHubStore((state) => state.reachable);
   const failure = useHubStore((state) => state.failure);
   const skipped = useHubStore((state) => state.skipped);
+  const sessionFailure = useHubStore((state) => state.sessionFailure);
   const refreshing = useHubStore((state) => state.refreshing);
   const refresh = useHubStore((state) => state.refresh);
   const disconnect = useHubStore((state) => state.disconnect);
 
   const confirmDisconnect = useCallback(() => {
-    Alert.alert('Disconnect from the hub?', 'Its address, token and cached camera list are removed from this phone.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Disconnect', style: 'destructive', onPress: () => void disconnect() },
-    ]);
+    confirm(
+      {
+        title: 'Disconnect from the hub?',
+        message: `Its address, token and cached camera list are removed from this ${isWeb ? 'browser' : 'phone'}.`,
+        confirmLabel: 'Disconnect',
+        destructive: true,
+      },
+      () => void disconnect(),
+    );
   }, [disconnect]);
 
   return (
@@ -111,11 +121,18 @@ function ConnectedHub() {
             left out.
           </Muted>
         ) : null}
+        {/* The list above arrived over the bearer token; video in a browser rides a cookie
+            instead, and the two fail on their own. Saying so beats silently black tiles. */}
+        {sessionFailure ? <Text style={styles.error}>{sessionFailure}</Text> : null}
         <Button title="Refresh now" variant="secondary" icon="refresh" loading={refreshing} onPress={() => void refresh()} />
       </Card>
       <Card>
         <SectionLabel>Disconnect</SectionLabel>
-        <Muted>Hub cameras disappear from the grid. Cameras saved on this phone are untouched.</Muted>
+        <Muted>
+          {isWeb
+            ? 'The grid empties: a browser plays nothing but what the hub serves it.'
+            : 'Hub cameras disappear from the grid. Cameras saved on this phone are untouched.'}
+        </Muted>
         <Button title="Disconnect" variant="danger" icon="unlink-outline" onPress={confirmDisconnect} />
       </Card>
     </>

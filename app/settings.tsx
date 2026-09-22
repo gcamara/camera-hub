@@ -1,18 +1,20 @@
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Switch, Text, View, useWindowDimensions } from 'react-native';
 
 import { VlcLogSheet } from '@/components/VlcLogSheet';
 import { Button, Card, Muted, SectionLabel, Segmented } from '@/components/ui';
+import { columnChoices, effectiveColumns } from '@/lib/layout';
+import { isWeb } from '@/lib/platform';
+import type { ColumnCount } from '@/lib/types';
 import { useCameraStore } from '@/store/cameraStore';
 import { useHubStore } from '@/store/hubStore';
 import { colors, font, spacing } from '@/theme';
 
-type Columns = '1' | '2' | '3';
-
 export default function SettingsScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const settings = useCameraStore((state) => state.settings);
   const updateSettings = useCameraStore((state) => state.updateSettings);
   const hub = useHubStore((state) => state.hub);
@@ -27,14 +29,11 @@ export default function SettingsScreen() {
         <SectionLabel>Grid</SectionLabel>
         <View style={styles.rowBetween}>
           <Text style={styles.label}>Columns</Text>
-          <Segmented<Columns>
-            value={String(settings.columns) as Columns}
-            onChange={(value) => void updateSettings({ columns: Number(value) as 1 | 2 | 3 })}
-            options={[
-              { value: '1', label: '1' },
-              { value: '2', label: '2' },
-              { value: '3', label: '3' },
-            ]}
+          {/* Only the counts this window can carry; the same range the grid's own toggle offers. */}
+          <Segmented
+            value={String(effectiveColumns(settings.columns, width))}
+            onChange={(value) => void updateSettings({ columns: Number(value) as ColumnCount })}
+            options={columnChoices(width).map((value) => ({ value: String(value), label: String(value) }))}
           />
         </View>
         <View style={styles.rowBetween}>
@@ -66,7 +65,9 @@ export default function SettingsScreen() {
         <Muted>
           {connected
             ? `${hub?.name ?? 'Hub'} · ${hubCameras} ${hubCameras === 1 ? 'camera' : 'cameras'}${reachable ? '' : ' · not answering'}`
-            : 'Pull the camera list from a hub on your network and play the streams it restreams.'}
+            : isWeb
+              ? 'A browser plays only what a hub restreams for it. Connect one and its cameras appear on the grid.'
+              : 'Pull the camera list from a hub on your network and play the streams it restreams.'}
         </Muted>
         <Button
           title={connected ? 'Manage hub' : 'Connect to hub'}
@@ -79,17 +80,22 @@ export default function SettingsScreen() {
       <Card>
         <SectionLabel>About</SectionLabel>
         <Muted>
-          Camera Hub plays RTSP streams straight from your cameras. Nothing leaves your network, and passwords are kept in the
-          iOS keychain. Away from home, connect to your LAN with a VPN such as Tailscale or WireGuard.
+          {isWeb
+            ? 'Camera Hub in a browser plays the fragmented MP4 a hub restreams for it. It speaks no RTSP and holds no camera passwords, so everything it shows comes from a hub. Away from home, reach the hub over a VPN such as Tailscale or WireGuard.'
+            : 'Camera Hub plays RTSP streams straight from your cameras. Nothing leaves your network, and passwords are kept in the iOS keychain. Away from home, connect to your LAN with a VPN such as Tailscale or WireGuard.'}
         </Muted>
         <Muted>Version {Constants.expoConfig?.version ?? '1.0.0'}</Muted>
       </Card>
 
-      <Card>
-        <SectionLabel>Diagnostics</SectionLabel>
-        <Muted>The player engine's own log. Open it after a stream fails and share it.</Muted>
-        <Button title="VLC log" variant="secondary" icon="document-text-outline" onPress={() => setLogOpen(true)} />
-      </Card>
+      {/* There is no libVLC in a browser: the web player is a <video> element, and the log
+          sheet would have nothing to show. */}
+      {isWeb ? null : (
+        <Card>
+          <SectionLabel>Diagnostics</SectionLabel>
+          <Muted>The player engine's own log. Open it after a stream fails and share it.</Muted>
+          <Button title="VLC log" variant="secondary" icon="document-text-outline" onPress={() => setLogOpen(true)} />
+        </Card>
+      )}
       <VlcLogSheet visible={logOpen} title="Settings" onClose={() => setLogOpen(false)} />
     </ScrollView>
   );

@@ -42,8 +42,11 @@ export interface Camera {
 
 export type CameraInput = Omit<Camera, 'id' | 'createdAt'>;
 
+export type ColumnCount = 1 | 2 | 3 | 4;
+
 export interface Settings {
-  columns: 1 | 2 | 3;
+  /** What was asked for; what a given window can carry is `effectiveColumns` in lib/layout. */
+  columns: ColumnCount;
   livePreviews: boolean;
   keepAwake: boolean;
 }

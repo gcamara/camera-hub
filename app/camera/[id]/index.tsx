@@ -17,6 +17,8 @@ import { usePlayableCamera } from '@/hooks/usePlayable';
 import { useReconnect } from '@/hooks/useReconnect';
 import { useShouldStream } from '@/hooks/useVisibility';
 import { getBrand } from '@/lib/brands';
+import { hasStream } from '@/lib/playable';
+import { isWeb } from '@/lib/platform';
 import type { StreamKind } from '@/lib/types';
 import { colors, font, spacing } from '@/theme';
 
@@ -29,8 +31,11 @@ export default function ViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const camera = usePlayableCamera(id);
   const streaming = useShouldStream();
-  // A hub camera the hub cannot serve has no address the app could dial on its own.
-  const reconnect = useReconnect(streaming && camera !== undefined && !camera.unreachable);
+  // A hub camera the hub cannot serve has no address the app could dial on its own, and one
+  // the hub restreams over RTSP alone has no address a browser could dial either. Neither is
+  // worth a reconnect loop: nothing about waiting will produce a URL.
+  const playable = camera !== undefined && !camera.unreachable && hasStream(camera);
+  const reconnect = useReconnect(streaming && playable);
 
   // Emulators decode in software and fall seconds behind a 1080p main stream; the
   // picture freezes on its first frame. Real devices start on the main stream.
@@ -88,14 +93,21 @@ export default function ViewerScreen() {
   const uri = kind === 'sub' && camera.subUrl !== '' ? camera.subUrl : camera.mainUrl;
   const brand = getBrand(camera.brand);
   const waiting = reconnect.retryIn !== null;
-  const status = camera.unreachable ? 'error' : waiting ? 'buffering' : reconnect.status;
-  const statusLabel = camera.unreachable ? 'Hub unreachable' : waiting ? `Reconnecting in ${reconnect.retryIn} s` : undefined;
+  const noStream = !camera.unreachable && !hasStream(camera);
+  const status = camera.unreachable || noStream ? 'error' : waiting ? 'buffering' : reconnect.status;
+  const statusLabel = camera.unreachable
+    ? 'Hub unreachable'
+    : noStream
+      ? 'Not playable here'
+      : waiting
+        ? `Reconnecting in ${reconnect.retryIn} s`
+        : undefined;
 
   return (
     <View style={styles.screen}>
       <StatusBar hidden />
       <Pressable style={StyleSheet.absoluteFill} onPress={toggleOverlay} accessibilityLabel="Toggle controls">
-        {streaming && !waiting && !camera.unreachable ? (
+        {streaming && !waiting && playable ? (
           <CameraPlayer
             key={`${uri}#${reconnect.attempt}`}
             uri={uri}
@@ -116,6 +128,11 @@ export default function ViewerScreen() {
               <Text style={styles.detail}>
                 {camera.origin} is not answering. This camera streams through the hub, and the app holds no credentials to
                 reach it any other way.
+              </Text>
+            ) : noStream ? (
+              <Text style={styles.detail}>
+                {camera.origin} restreams this camera over RTSP only, which a browser cannot play. It will still play in
+                the phone app.
               </Text>
             ) : reconnect.detail ? (
               <Text style={styles.detail}>{reconnect.detail}</Text>
@@ -169,7 +186,9 @@ export default function ViewerScreen() {
                 onPress={() => setMuted((m) => !m)}
               />
               <IconButton icon="refresh" label="Reconnect" background={colors.overlay} tint="#FFFFFF" style={styles.glass} onPress={reconnect.retryNow} />
-              <IconButton icon="document-text-outline" label="VLC log" background={colors.overlay} tint="#FFFFFF" style={styles.glass} onPress={() => setLogOpen(true)} />
+              {isWeb ? null : (
+                <IconButton icon="document-text-outline" label="VLC log" background={colors.overlay} tint="#FFFFFF" style={styles.glass} onPress={() => setLogOpen(true)} />
+              )}
               {camera.source === 'local' ? (
                 <IconButton
                   icon="settings-outline"

@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useRouter } from 'expo-router';
-import { useCallback } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useMemo } from 'react';
+import { Alert, FlatList, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CameraTile } from '@/components/CameraTile';
@@ -11,7 +11,11 @@ import { useHubRefresh } from '@/hooks/useHubRefresh';
 import { usePlayableCameras } from '@/hooks/usePlayable';
 import { useShouldStream } from '@/hooks/useVisibility';
 import { getBrand } from '@/lib/brands';
+import { confirm, notify } from '@/lib/dialogs';
+import { columnChoices, effectiveColumns, fillLastRow } from '@/lib/layout';
 import { hubCameraId, shouldPreview, type PlayableCamera } from '@/lib/playable';
+import { isWeb } from '@/lib/platform';
+import type { ColumnCount } from '@/lib/types';
 import { useCameraStore } from '@/store/cameraStore';
 import { useHubStore } from '@/store/hubStore';
 import { colors, font, radius, spacing } from '@/theme';
@@ -32,6 +36,7 @@ function greeting(): string {
 export default function CamerasScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const settings = useCameraStore((state) => state.settings);
   const updateSettings = useCameraStore((state) => state.updateSettings);
   const removeCamera = useCameraStore((state) => state.removeCamera);
@@ -43,6 +48,9 @@ export default function CamerasScreen() {
 
   const hubCount = cameras.filter((camera) => camera.source === 'hub').length;
   const hubDown = cameras.some((camera) => camera.unreachable);
+  const choices = columnChoices(width);
+  const columns = effectiveColumns(settings.columns, width);
+  const cells = useMemo(() => fillLastRow(cameras, columns), [cameras, columns]);
 
   const openCamera = useCallback(
     (camera: PlayableCamera) => router.push(`/camera/${encodeURIComponent(camera.id)}`),
@@ -67,18 +75,19 @@ export default function CamerasScreen() {
           );
         }
         const hubId = hubCameraId(camera.id);
-        Alert.alert(camera.name, lines.join('\n\n'), [
-          // Only offered when the hub allows a preview at all; this phone may turn one off, never on.
-          ...(camera.previewVetoed
-            ? []
-            : [
-                {
-                  text: camera.livePreview ? 'Turn preview off here' : 'Turn preview on here',
-                  onPress: () => void setPreviewOff(hubId, camera.livePreview),
-                },
-              ]),
-          { text: 'Close', style: 'cancel' as const },
-        ]);
+        // Only offered when the hub allows a preview at all; this phone may turn one off, never on.
+        if (camera.previewVetoed) {
+          notify(camera.name, lines.join('\n\n'));
+          return;
+        }
+        confirm(
+          {
+            title: camera.name,
+            message: lines.join('\n\n'),
+            confirmLabel: camera.livePreview ? 'Turn preview off here' : 'Turn preview on here',
+          },
+          () => void setPreviewOff(hubId, camera.livePreview),
+        );
         return;
       }
       Alert.alert(camera.name, undefined, [
@@ -87,10 +96,15 @@ export default function CamerasScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: () =>
-            Alert.alert('Delete camera?', `${camera.name} will be removed from this phone.`, [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Delete', style: 'destructive', onPress: () => void removeCamera(camera.id) },
-            ]),
+            confirm(
+              {
+                title: 'Delete camera?',
+                message: `${camera.name} will be removed from this phone.`,
+                confirmLabel: 'Delete',
+                destructive: true,
+              },
+              () => void removeCamera(camera.id),
+            ),
         },
         { text: 'Cancel', style: 'cancel' },
       ]);
@@ -107,7 +121,11 @@ export default function CamerasScreen() {
         </View>
         <View style={styles.headerActions}>
           <IconButton icon="settings-outline" label="Settings" size={20} onPress={() => router.push('/settings')} style={styles.outlined} />
-          {cameras.length > 0 ? (
+          {/* A browser has no camera of its own to add: it holds no credentials and cannot
+              speak RTSP, so everything it can play comes from the hub. */}
+          {isWeb ? (
+            <IconButton icon="server-outline" label="Camera hub" size={22} tint={colors.accentText} background={colors.accent} onPress={() => router.push('/hub')} />
+          ) : cameras.length > 0 ? (
             <IconButton icon="add" label="Add camera" size={26} tint={colors.accentText} background={colors.accent} onPress={() => router.push('/add')} />
           ) : null}
         </View>
@@ -120,19 +138,21 @@ export default function CamerasScreen() {
             {hubDown ? ' · hub unreachable' : ''}
             {settings.livePreviews ? '' : ' · previews off'}
           </Text>
+          {/* The counts on offer follow the window, so a desktop browser gets the 3 and 4 a
+              phone has no room for, and the selected pill is what is actually on screen. */}
           <View style={styles.columnToggle} accessibilityRole="radiogroup">
-            {([1, 2] as const).map((value) => {
-              const selected = settings.columns === value;
+            {choices.map((value) => {
+              const selected = columns === value;
               return (
                 <Pressable
                   key={value}
                   accessibilityRole="radio"
-                  accessibilityLabel={value === 1 ? 'One column' : 'Two columns'}
+                  accessibilityLabel={`${value} ${value === 1 ? 'column' : 'columns'}`}
                   accessibilityState={{ selected }}
-                  onPress={() => void updateSettings({ columns: value })}
+                  onPress={() => void updateSettings({ columns: value as ColumnCount })}
                   style={[styles.columnButton, selected && styles.columnButtonSelected]}
                 >
-                  <Ionicons name={value === 1 ? 'square-outline' : 'grid-outline'} size={16} color={selected ? colors.text : colors.muted} />
+                  <Text style={[styles.columnButtonText, selected && styles.columnButtonTextSelected]}>{value}</Text>
                 </Pressable>
               );
             })}
@@ -148,49 +168,67 @@ export default function CamerasScreen() {
         <View style={{ paddingHorizontal: spacing.lg }}>{header}</View>
         <View style={styles.emptyHero}>
           <View style={styles.emptyHeroIcon}>
-            <Ionicons name="videocam-outline" size={26} color="#FFFFFF" />
+            <Ionicons name={isWeb ? 'server-outline' : 'videocam-outline'} size={26} color="#FFFFFF" />
           </View>
-          <Text style={styles.emptyHeroText}>Your first camera goes here</Text>
+          <Text style={styles.emptyHeroText}>{isWeb ? "Your hub's cameras go here" : 'Your first camera goes here'}</Text>
         </View>
         <View style={styles.emptyCopy}>
-          <Text style={styles.emptyTitle}>Every brand, one screen</Text>
-          <Text style={styles.emptyBody}>Streams play straight from the cameras over your Wi‑Fi. Nothing goes through a cloud.</Text>
+          <Text style={styles.emptyTitle}>{isWeb ? 'Whatever the hub serves' : 'Every brand, one screen'}</Text>
+          <Text style={styles.emptyBody}>
+            {isWeb
+              ? 'This browser plays the streams a hub restreams for it, and nothing else: it holds no camera credentials and cannot speak RTSP. Connect the hub with its address and the token it issued, and its cameras appear here.'
+              : 'Streams play straight from the cameras over your Wi‑Fi. Nothing goes through a cloud.'}
+          </Text>
         </View>
         <View style={{ flex: 1 }} />
         <View style={[styles.emptyActions, { paddingBottom: insets.bottom + spacing.xl }]}>
-          <Button title="Find cameras on my network" icon="search" onPress={() => router.push('/add/discover')} />
-          <Button title="Add manually" variant="secondary" icon="create-outline" onPress={() => router.push('/add/manual')} />
+          {isWeb ? (
+            <Button title="Connect a hub" icon="server-outline" onPress={() => router.push('/hub')} />
+          ) : (
+            <>
+              <Button title="Find cameras on my network" icon="search" onPress={() => router.push('/add/discover')} />
+              <Button title="Add manually" variant="secondary" icon="create-outline" onPress={() => router.push('/add/manual')} />
+            </>
+          )}
         </View>
       </View>
     );
   }
 
-  const large = settings.columns === 1;
+  const large = columns === 1;
 
   return (
     <View style={styles.screen}>
       {settings.keepAwake && streaming ? <KeepAwakeWhileViewing /> : null}
       <FlatList
-        key={settings.columns}
-        data={cameras}
-        keyExtractor={(camera) => camera.id}
-        numColumns={settings.columns}
+        key={columns}
+        data={cells}
+        keyExtractor={(camera, index) => camera?.id ?? `spacer-${index}`}
+        numColumns={columns}
         ListHeaderComponent={header}
-        columnWrapperStyle={settings.columns > 1 ? styles.columns : undefined}
+        columnWrapperStyle={columns > 1 ? styles.columns : undefined}
         contentContainerStyle={[styles.grid, { paddingBottom: insets.bottom + spacing.xl }]}
-        renderItem={({ item }) => (
-          <CameraTile
-            camera={item}
-            live={shouldPreview(item, live)}
-            large={large}
-            onPress={() => openCamera(item)}
-            onLongPress={() => showActions(item)}
-          />
-        )}
+        renderItem={({ item }) =>
+          item ? (
+            <CameraTile
+              camera={item}
+              live={shouldPreview(item, live)}
+              large={large}
+              onPress={() => openCamera(item)}
+              onLongPress={() => showActions(item)}
+            />
+          ) : (
+            <View style={styles.spacer} />
+          )
+        }
         ListFooterComponent={
           <View style={styles.footer}>
             <Muted center>
-              {hubCount > 0 ? 'Long-press for options · hub cameras are managed by the hub' : 'Long-press a camera to edit'}
+              {isWeb
+                ? 'Cameras here are the hub’s. Add, rename or remove them there.'
+                : hubCount > 0
+                  ? 'Long-press for options · hub cameras are managed by the hub'
+                  : 'Long-press a camera to edit'}
             </Muted>
           </View>
         }
@@ -212,8 +250,11 @@ const styles = StyleSheet.create({
   columnToggle: { flexDirection: 'row', gap: 4, padding: 3, borderRadius: radius.sm, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
   columnButton: { width: 32, height: 28, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
   columnButtonSelected: { backgroundColor: colors.border },
+  columnButtonText: { fontSize: font.small, fontWeight: '600', color: colors.muted },
+  columnButtonTextSelected: { color: colors.text },
   grid: { gap: spacing.md, paddingHorizontal: spacing.lg },
   columns: { gap: spacing.md },
+  spacer: { flex: 1 },
   footer: { paddingTop: spacing.xl },
   emptyHero: {
     marginHorizontal: spacing.lg,

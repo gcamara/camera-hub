@@ -1,13 +1,34 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import type { ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CameraPlayer } from './CameraPlayer';
 import { GlassPill } from './GlassPill';
 import { useReconnect } from '@/hooks/useReconnect';
 import { getBrand } from '@/lib/brands';
-import { previewUrl, type PlayableCamera } from '@/lib/playable';
+import { hasStream, previewUrl, type PlayableCamera } from '@/lib/playable';
 import { colors, radius } from '@/theme';
+
+type Resting = 'unreachable' | 'no-stream' | 'preview-off';
+
+const RESTING_ICON: Record<Resting, ComponentProps<typeof Ionicons>['name']> = {
+  unreachable: 'cloud-offline-outline',
+  'no-stream': 'desktop-outline',
+  'preview-off': 'play-circle-outline',
+};
+
+const RESTING_LABEL: Record<Resting, string> = {
+  unreachable: 'Hub unreachable',
+  'no-stream': 'Not playable here',
+  'preview-off': 'Tap to view',
+};
+
+const RESTING_HINT: Record<Resting, string> = {
+  unreachable: 'This camera is only reachable through the hub.',
+  'no-stream': 'The hub restreams this camera over RTSP only, which a browser cannot play.',
+  'preview-off': '',
+};
 
 interface CameraTileProps {
   camera: PlayableCamera;
@@ -26,8 +47,16 @@ export function CameraTile({ camera, live, large, onPress, onLongPress }: Camera
   const waiting = retryIn !== null;
   const showVideo = live && !waiting;
   const isLive = showVideo && status === 'live';
-  // Two reasons a tile will never show video, however long you wait; both owe the person a way in.
-  const resting = camera.unreachable ? 'unreachable' : !camera.livePreview ? 'preview-off' : null;
+  // Three reasons a tile will never show video, however long you wait; each owes the person a
+  // different sentence. `no-stream` is the browser's: the hub is up and this camera is fine,
+  // but the hub restreams it only over RTSP and no browser can play that.
+  const resting = camera.unreachable
+    ? 'unreachable'
+    : !hasStream(camera)
+      ? 'no-stream'
+      : !camera.livePreview
+        ? 'preview-off'
+        : null;
 
   return (
     <Pressable
@@ -45,16 +74,14 @@ export function CameraTile({ camera, live, large, onPress, onLongPress }: Camera
           {resting ? (
             <>
               <Ionicons
-                name={resting === 'unreachable' ? 'cloud-offline-outline' : 'play-circle-outline'}
+                name={RESTING_ICON[resting]}
                 size={large ? 34 : 26}
                 color={resting === 'unreachable' ? colors.danger : colors.muted}
               />
               <Text style={[styles.restingText, large ? styles.restingLarge : styles.restingCompact]}>
-                {resting === 'unreachable' ? 'Hub unreachable' : 'Tap to view'}
+                {RESTING_LABEL[resting]}
               </Text>
-              {large && resting === 'unreachable' ? (
-                <Text style={styles.restingHint}>This camera is only reachable through the hub.</Text>
-              ) : null}
+              {large && RESTING_HINT[resting] ? <Text style={styles.restingHint}>{RESTING_HINT[resting]}</Text> : null}
             </>
           ) : (
             <Ionicons
@@ -78,6 +105,8 @@ export function CameraTile({ camera, live, large, onPress, onLongPress }: Camera
           <GlassPill solid={colors.accent} textColor={colors.accentText} label={`RECONNECTING · ${retryIn} s`} />
         ) : camera.unreachable ? (
           <GlassPill dot={colors.danger} label="HUB OFFLINE" />
+        ) : resting === 'no-stream' ? (
+          <GlassPill label="NO WEB STREAM" />
         ) : !camera.livePreview ? (
           <GlassPill label="PREVIEW OFF" />
         ) : isLive ? (
