@@ -1,8 +1,41 @@
-import type { HubCamera, HubInfo } from './hub';
+import { normalizeBaseUrl, type HubCamera, type HubInfo } from './hub';
 import { buildStreamUrl, hasSubStream } from './rtsp';
 import type { BrandId, Camera } from './types';
 
 export type CameraSource = 'local' | 'hub';
+
+/**
+ * Where a hub camera's streams are read from, and by what. This is the single seam where the
+ * app decides that a browser plays the hub's fragmented MP4 and a phone plays RTSP; every
+ * screen downstream reads `mainUrl`/`subUrl` and never asks which platform it is on.
+ */
+export interface HubStreamContext {
+  /** The hub's origin, as the hub store normalised it. */
+  baseUrl: string;
+  /** True in a browser, where RTSP is unplayable and the hub's MP4 path is the only stream. */
+  web: boolean;
+}
+
+/**
+ * The hub sends a root-relative path because only the client knows which origin it reached
+ * the hub on. Resolving it against the hub's own base URL rather than `location` gives the
+ * same answer in the deployment this is built for — the hub serves the page too — and keeps
+ * a development build on another port pointed at the hub instead of at itself.
+ */
+export function resolveWebUrl(baseUrl: string, path: string): string {
+  if (path === '') return '';
+  const origin = normalizeBaseUrl(baseUrl);
+  return origin === '' ? '' : `${origin}${path}`;
+}
+
+/**
+ * The URL this platform can actually play. A browser gets an empty string when the hub
+ * offered no web stream, which reads downstream exactly like a camera with no sub stream:
+ * nothing is dialled and the tile says why.
+ */
+export function hubStreamUrl(rtspUrl: string, webPath: string, context: HubStreamContext): string {
+  return context.web ? resolveWebUrl(context.baseUrl, webPath) : rtspUrl;
+}
 
 /**
  * One camera the app can play, whether it is saved on this phone or served by the hub.
@@ -67,6 +100,7 @@ export function playableFromCamera(camera: Camera, password: string): PlayableCa
 export function playableFromHub(
   camera: HubCamera,
   hub: HubInfo,
+  context: HubStreamContext,
   reachable: boolean,
   previewOff: boolean,
 ): PlayableCamera {
@@ -76,8 +110,8 @@ export function playableFromHub(
     brand: camera.brand,
     origin: hub.name,
     source: 'hub',
-    mainUrl: camera.mainUrl,
-    subUrl: camera.subUrl,
+    mainUrl: hubStreamUrl(camera.mainUrl, camera.mainWebUrl, context),
+    subUrl: hubStreamUrl(camera.subUrl, camera.subWebUrl, context),
     livePreview: camera.livePreview && !previewOff,
     previewVetoed: !camera.livePreview,
     unreachable: !reachable,
@@ -90,9 +124,18 @@ export function previewUrl(camera: PlayableCamera): string {
 }
 
 /**
+ * Whether there is anything at all to dial. In a browser this is false for a hub camera the
+ * hub restreams only over RTSP, which is a camera that exists and is reachable and still
+ * cannot be shown here — a third thing to say, and not the same as "offline".
+ */
+export function hasStream(camera: PlayableCamera): boolean {
+  return previewUrl(camera) !== '';
+}
+
+/**
  * The grid streams a camera only when the global switch and the camera's own flag agree.
  * A hub camera the hub cannot serve is never dialled, because nothing would answer.
  */
 export function shouldPreview(camera: PlayableCamera, livePreviews: boolean): boolean {
-  return livePreviews && camera.livePreview && !camera.unreachable && previewUrl(camera) !== '';
+  return livePreviews && camera.livePreview && !camera.unreachable && hasStream(camera);
 }

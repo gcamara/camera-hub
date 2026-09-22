@@ -1,15 +1,21 @@
 import {
   camerasEndpoint,
+  describeSessionResult,
   fetchHubCameras,
+  needsHubSession,
   normalizeBaseUrl,
+  openHubSession,
   parseHubPayload,
+  sessionEndpoint,
   type HubRequest,
 } from '../hub';
 import type { FetchLike } from '../onvif/client';
 
 interface Call {
   url: string;
+  method?: string;
   headers: Record<string, string>;
+  credentials?: RequestCredentials;
 }
 
 function fakeResponse(status: number, body?: unknown, etag?: string): Response {
@@ -27,7 +33,12 @@ function fakeResponse(status: number, body?: unknown, etag?: string): Response {
 function recorder(answer: (call: Call) => Response | Promise<Response>): { fetch: FetchLike; calls: Call[] } {
   const calls: Call[] = [];
   const fetch: FetchLike = async (url, init) => {
-    const call = { url, headers: (init.headers ?? {}) as Record<string, string> };
+    const call: Call = {
+      url,
+      method: init.method,
+      headers: (init.headers ?? {}) as Record<string, string>,
+      credentials: init.credentials,
+    };
     calls.push(call);
     return answer(call);
   };
@@ -43,8 +54,8 @@ const payload = {
       brand: 'reolink',
       livePreview: true,
       streams: {
-        main: { url: 'rtsp://go2rtc:placeholder@hub.lan:8654/front' },
-        sub: { url: 'rtsp://go2rtc:placeholder@hub.lan:8654/front_sub' },
+        main: { url: 'rtsp://go2rtc:placeholder@hub.lan:8654/front', webUrl: '/stream/front-door/main.mp4' },
+        sub: { url: 'rtsp://go2rtc:placeholder@hub.lan:8654/front_sub', webUrl: '/stream/front-door/sub.mp4' },
       },
       capabilities: { ptz: false },
     },
@@ -87,8 +98,16 @@ describe('fetchHubCameras', () => {
       livePreview: true,
       mainUrl: 'rtsp://go2rtc:placeholder@hub.lan:8654/front',
       subUrl: 'rtsp://go2rtc:placeholder@hub.lan:8654/front_sub',
+      mainWebUrl: '/stream/front-door/main.mp4',
+      subWebUrl: '/stream/front-door/sub.mp4',
       ptz: false,
     });
+  });
+
+  it('asks for credentials so the browser sends the stream cookie it was given', async () => {
+    const { fetch, calls } = recorder(() => fakeResponse(200, payload));
+    await fetchHubCameras(request({ fetch }));
+    expect(calls[0]?.credentials).toBe('include');
   });
 
   it('sends the cached ETag and reports 304 as unchanged', async () => {
@@ -204,5 +223,137 @@ describe('parseHubPayload', () => {
     expect(result.snapshot.cameras[0]?.name).toBe('ok');
     expect(result.snapshot.hub).toEqual({ name: 'Hub', version: 'unknown' });
     expect(result.snapshot.etag).toBe('W/"2"');
+  });
+});
+
+describe('parseHubPayload · webUrl', () => {
+  function webUrls(streams: unknown): { mainWebUrl: string; subWebUrl: string } {
+    const result = parseHubPayload(
+      { hub: { name: 'h', version: '1' }, cameras: [{ id: 'a', streams }] },
+      null,
+    );
+    if (result.outcome !== 'ok') throw new Error(`expected ok, got ${result.outcome}`);
+    const camera = result.snapshot.cameras[0];
+    if (!camera) throw new Error('expected the camera to survive parsing');
+    return { mainWebUrl: camera.mainWebUrl, subWebUrl: camera.subWebUrl };
+  }
+
+  it('keeps a root-relative path on each stream', () => {
+    expect(
+      webUrls({
+        main: { url: 'rtsp://hub/a', webUrl: '/stream/a/main.mp4' },
+        sub: { url: 'rtsp://hub/a_sub', webUrl: '/stream/a/sub.mp4?start=live' },
+      }),
+    ).toEqual({ mainWebUrl: '/stream/a/main.mp4', subWebUrl: '/stream/a/sub.mp4?start=live' });
+  });
+
+  it('treats an absent webUrl as normal — an older hub sends none', () => {
+    expect(webUrls({ main: { url: 'rtsp://hub/a' }, sub: { url: 'rtsp://hub/a_sub' } })).toEqual({
+      mainWebUrl: '',
+      subWebUrl: '',
+    });
+  });
+
+  it('keeps the browser stream even when only one quality has one', () => {
+    expect(webUrls({ main: { url: 'rtsp://hub/a', webUrl: '/stream/a/main.mp4' }, sub: { url: 'rtsp://hub/a_sub' } })).toEqual(
+      { mainWebUrl: '/stream/a/main.mp4', subWebUrl: '' },
+    );
+  });
+
+  it('refuses anything that is not a path on the hub itself', () => {
+    const rejected = [
+      // Protocol-relative: the browser would resolve this against another host entirely.
+      '//evil.example/stream.mp4',
+      'https://evil.example/stream.mp4',
+      'javascript:alert(1)',
+      'stream/a/main.mp4',
+      '/stream/a /main.mp4',
+      '',
+      42,
+      null,
+      { url: '/stream/a/main.mp4' },
+    ];
+    for (const webUrl of rejected) {
+      expect(webUrls({ main: { url: 'rtsp://hub/a', webUrl } }).mainWebUrl).toBe('');
+    }
+  });
+
+  it('trims what the hub sent before judging it', () => {
+    expect(webUrls({ main: { url: 'rtsp://hub/a', webUrl: '  /stream/a/main.mp4  ' } }).mainWebUrl).toBe(
+      '/stream/a/main.mp4',
+    );
+  });
+
+  it('survives a stream entry that is not an object', () => {
+    expect(webUrls({ main: { url: 'rtsp://hub/a' }, sub: 'nonsense' })).toEqual({ mainWebUrl: '', subWebUrl: '' });
+  });
+});
+
+describe('needsHubSession', () => {
+  it('is true only in a browser with a hub and a token', () => {
+    expect(needsHubSession(true, 'http://hub.lan:8080', 'placeholder-token')).toBe(true);
+    // A phone puts the token on every request itself and must never ask for a cookie.
+    expect(needsHubSession(false, 'http://hub.lan:8080', 'placeholder-token')).toBe(false);
+    expect(needsHubSession(true, '', 'placeholder-token')).toBe(false);
+    expect(needsHubSession(true, '   ', 'placeholder-token')).toBe(false);
+    expect(needsHubSession(true, 'http://hub.lan:8080', '')).toBe(false);
+    expect(needsHubSession(true, 'http://hub.lan:8080', '   ')).toBe(false);
+  });
+});
+
+describe('openHubSession', () => {
+  it('posts the bearer token to /api/session and asks for credentials', async () => {
+    const { fetch, calls } = recorder(() => fakeResponse(204));
+    const result = await openHubSession(request({ fetch }));
+
+    expect(result).toEqual({ outcome: 'ok' });
+    expect(calls[0]?.url).toBe('http://hub.lan:8080/api/session');
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.headers.Authorization).toBe('Bearer placeholder-token');
+    // Without this the browser would throw the Set-Cookie away and every <video> would 401.
+    expect(calls[0]?.credentials).toBe('include');
+  });
+
+  it('separates a rejected token from a hub that has no session endpoint', async () => {
+    for (const status of [401, 403]) {
+      const { fetch } = recorder(() => fakeResponse(status));
+      expect(await openHubSession(request({ fetch }))).toEqual({ outcome: 'unauthorized' });
+    }
+    for (const status of [404, 405]) {
+      const { fetch } = recorder(() => fakeResponse(status));
+      expect(await openHubSession(request({ fetch }))).toEqual({ outcome: 'unsupported' });
+    }
+  });
+
+  it('names any other status and any transport failure', async () => {
+    const { fetch } = recorder(() => fakeResponse(503));
+    expect(await openHubSession(request({ fetch }))).toEqual({ outcome: 'failed', detail: 'the hub answered 503' });
+
+    const throwing: FetchLike = async () => {
+      throw new TypeError('Network request failed');
+    };
+    expect(await openHubSession(request({ fetch: throwing }))).toEqual({
+      outcome: 'failed',
+      detail: 'Network request failed',
+    });
+  });
+
+  it('refuses a hub address it cannot use', async () => {
+    expect(await openHubSession(request({ baseUrl: '  ' }))).toEqual({ outcome: 'failed', detail: 'no hub address' });
+  });
+
+  it('says nothing when the cookie arrived and something specific when it did not', () => {
+    expect(describeSessionResult({ outcome: 'ok' })).toBeNull();
+    expect(describeSessionResult({ outcome: 'unauthorized' })).toContain('rejected the token');
+    expect(describeSessionResult({ outcome: 'unsupported' })).toContain('no browser streams');
+    expect(describeSessionResult({ outcome: 'failed', detail: 'the hub answered 503' })).toContain(
+      'the hub answered 503',
+    );
+  });
+});
+
+describe('sessionEndpoint', () => {
+  it('builds the contract endpoint', () => {
+    expect(sessionEndpoint('hub.lan:8080/')).toBe('http://hub.lan:8080/api/session');
   });
 });

@@ -1,7 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 
-import { fetchHubCameras, normalizeBaseUrl, type HubCamera, type HubInfo, type HubResult } from '@/lib/hub';
+import {
+  describeSessionResult,
+  fetchHubCameras,
+  needsHubSession,
+  normalizeBaseUrl,
+  openHubSession,
+  type HubCamera,
+  type HubInfo,
+  type HubResult,
+  type SessionResult,
+} from '@/lib/hub';
+import { isWeb } from '@/lib/platform';
 import { readSecret, secrets } from '@/lib/secrets';
 
 const HUB_KEY = 'camerahub.hub';
@@ -33,10 +44,21 @@ interface HubState {
   skipped: number;
   /** Hub camera ids this phone keeps out of its grid, whatever the hub says. */
   previewOff: string[];
+  /**
+   * Why this browser has no stream cookie, in one sentence, or null when it has one or does
+   * not need one. Kept apart from `failure` because the camera list and the streams
+   * authenticate differently on web and fail independently.
+   */
+  sessionFailure: string | null;
   refreshing: boolean;
   hydrate: () => Promise<void>;
   connect: (baseUrl: string, token: string) => Promise<HubResult>;
   refresh: () => Promise<HubResult | null>;
+  /**
+   * Trades the stored token for the hub's httpOnly stream cookie. Returns null on a phone,
+   * which authenticates every request with the bearer header and needs no cookie at all.
+   */
+  openSession: () => Promise<SessionResult | null>;
   /**
    * This phone's own preview choice for one hub camera. It can only subtract: a camera
    * the hub keeps off stays off, because only the hub knows a camera cannot take a
@@ -45,6 +67,9 @@ interface HubState {
   setPreviewOff: (hubCameraId: string, off: boolean) => Promise<void>;
   disconnect: () => Promise<void>;
 }
+
+/** The stream-cookie request in flight, shared by everyone who asks while it is. */
+let pendingSession: Promise<SessionResult | null> | null = null;
 
 async function persist(state: StoredHub): Promise<void> {
   await AsyncStorage.setItem(HUB_KEY, JSON.stringify(state));
@@ -61,6 +86,7 @@ export const useHubStore = create<HubState>((set, get) => ({
   failure: null,
   skipped: 0,
   previewOff: [],
+  sessionFailure: null,
   refreshing: false,
 
   hydrate: async () => {
@@ -86,6 +112,7 @@ export const useHubStore = create<HubState>((set, get) => ({
       reachable: true,
       failure: null,
       skipped: 0,
+      sessionFailure: null,
     });
   },
 
@@ -112,9 +139,31 @@ export const useHubStore = create<HubState>((set, get) => ({
       reachable: true,
       failure: null,
       skipped: snapshot.skipped,
+      sessionFailure: null,
       refreshing: false,
     });
+    // The token is good and stored; a browser now needs it as a cookie before the first tile
+    // asks for video. Its outcome lands in `sessionFailure` and never fails the connection:
+    // the camera list is already in hand and is worth showing either way.
+    await get().openSession();
     return result;
+  },
+
+  openSession: () => {
+    // `connect` asks for a cookie and, in the same tick, flipping `connected` makes the grid's
+    // refresh hook ask again; without this the hub would mint two sessions for one browser.
+    if (pendingSession) return pendingSession;
+    const { baseUrl, token } = get();
+    if (!needsHubSession(isWeb, baseUrl, token)) return Promise.resolve(null);
+    pendingSession = openHubSession({ baseUrl, token })
+      .then((result) => {
+        set({ sessionFailure: describeSessionResult(result) });
+        return result;
+      })
+      .finally(() => {
+        pendingSession = null;
+      });
+    return pendingSession;
   },
 
   refresh: async () => {
@@ -180,6 +229,7 @@ export const useHubStore = create<HubState>((set, get) => ({
       reachable: true,
       failure: null,
       skipped: 0,
+      sessionFailure: null,
       refreshing: false,
     });
   },

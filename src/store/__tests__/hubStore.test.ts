@@ -20,6 +20,8 @@ const cached: HubCamera = {
   livePreview: true,
   mainUrl: 'rtsp://go2rtc:placeholder@hub.lan:8654/garage',
   subUrl: '',
+  mainWebUrl: '',
+  subWebUrl: '',
   ptz: false,
 };
 
