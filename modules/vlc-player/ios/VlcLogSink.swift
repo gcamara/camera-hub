@@ -34,8 +34,18 @@ final class VlcLogSink: NSObject, VLCLogging {
    * and this log is meant to be shared. Any `user:password@` is masked on the way in,
    * whoever wrote the line, without depending on what precedes it.
    */
+  ///
+  /// libVLC's HTTP module also prints every request it sends, headers included, and a hub
+  /// stream request carries the hub token in `Authorization: Basic …` (base64 is not
+  /// encryption). Header values that are credentials are masked the same way.
   static func redact(_ text: String) -> String {
-    text.replacingOccurrences(of: "[^\\s'`\"/@:]+:[^\\s'`\"/@]+@", with: "***@", options: .regularExpression)
+    text
+      .replacingOccurrences(of: "[^\\s'`\"/@:]+:[^\\s'`\"/@]+@", with: "***@", options: .regularExpression)
+      .replacingOccurrences(
+        of: "(?im)^((?:Proxy-)?Authorization:[ \\t]*[A-Za-z]+[ \\t]+)\\S+",
+        with: "$1***",
+        options: .regularExpression)
+      .replacingOccurrences(of: "(?im)^((?:Set-)?Cookie:[ \\t]*).*$", with: "$1***", options: .regularExpression)
   }
 
   /// The player view's own lifecycle, in the same log as libVLC's lines.
