@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { CameraPlayer } from './CameraPlayer';
 import { StatusPill } from './StatusPill';
@@ -21,6 +21,7 @@ export interface CameraFormValues {
   channel: string;
   mainPath: string;
   subPath: string;
+  livePreview: boolean;
 }
 
 /** Fields a caller may pre-fill for a new camera, e.g. the host and brand a scan already found. */
@@ -50,6 +51,7 @@ function valuesFrom(camera: CameraPrefill | undefined, password: string): Camera
     channel: String(camera?.channel ?? 1),
     mainPath: camera?.mainPath ?? brand.mainPath,
     subPath: camera?.subPath ?? brand.subPath,
+    livePreview: camera?.livePreview ?? true,
   };
 }
 
@@ -77,6 +79,7 @@ export function toCameraInput(values: CameraFormValues, onvif?: Camera['onvif'])
     channel: Number(values.channel) || 1,
     mainPath: normalizePath(values.mainPath),
     subPath: values.subPath.trim() === '' ? '' : normalizePath(values.subPath),
+    livePreview: values.livePreview,
   };
   if (onvif) input.onvif = onvif;
   return input;
@@ -299,6 +302,20 @@ export function CameraForm({ initial, initialPassword = '', submitLabel, onSubmi
             mono
             placeholder="Leave empty to reuse the main stream"
           />
+          <View style={styles.switchRow}>
+            <View style={styles.flex}>
+              <Text style={styles.switchLabel}>Live preview in the grid</Text>
+              <Muted>
+                Turn this off for a camera that allows one connection at a time: its tile would hold the session the
+                full-screen view needs. The full-screen view keeps working either way.
+              </Muted>
+            </View>
+            <Switch
+              value={values.livePreview}
+              onValueChange={(value) => set('livePreview', value)}
+              trackColor={{ true: colors.accent, false: colors.border }}
+            />
+          </View>
           <View style={styles.preview}>
             <Text style={styles.previewText} selectable>
               {redactUrl(previewUrl)}
@@ -377,6 +394,8 @@ const styles = StyleSheet.create({
   channelLabel: { fontSize: font.small, color: colors.muted },
   channelField: { width: 64, gap: 0 },
   channelInput: { height: 36, textAlign: 'center', paddingHorizontal: 8 },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.lg },
+  switchLabel: { fontSize: font.body, color: colors.text, marginBottom: 2 },
   preview: { backgroundColor: '#11161D', borderRadius: 10, padding: 10 },
   previewText: { fontFamily: 'Menlo', fontSize: 12, lineHeight: 17, color: colors.muted },
   applyButton: { minHeight: 48, marginTop: 18 },

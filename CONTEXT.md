@@ -9,6 +9,17 @@ stream over the LAN with no cloud in between.
 A saved device the app can play: a host, an RTSP port, credentials and one or two stream paths.
 _Avoid_: device (that is a Discovered device, below), feed
 
+**Hub**:
+A server on the network that owns its own camera list and restreams each of its cameras through
+go2rtc. The app pulls that list over an authenticated HTTP API and plays the URLs it returns; it never
+learns those cameras' own passwords, only go2rtc's, which are embedded in the URLs.
+_Avoid_: server, NVR, bridge
+
+**Playable camera**:
+One camera as the grid and the viewer see it, saved on this phone or served by the hub: a name, a
+brand, an origin and the stream URLs, with nothing else about where it came from.
+_Avoid_: item, entry
+
 **Stream**:
 One RTSP endpoint of a camera. Every camera has a *main* stream; most also have a *sub* stream at a
 lower resolution, which the grid plays.

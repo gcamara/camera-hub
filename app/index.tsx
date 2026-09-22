@@ -7,8 +7,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CameraTile } from '@/components/CameraTile';
 import { Button, IconButton, Muted } from '@/components/ui';
+import { useHubRefresh } from '@/hooks/useHubRefresh';
+import { usePlayableCameras } from '@/hooks/usePlayable';
 import { useShouldStream } from '@/hooks/useVisibility';
-import type { Camera } from '@/lib/types';
+import { getBrand } from '@/lib/brands';
+import { shouldPreview, type PlayableCamera } from '@/lib/playable';
 import { useCameraStore } from '@/store/cameraStore';
 import { colors, font, radius, spacing } from '@/theme';
 
@@ -28,18 +31,39 @@ function greeting(): string {
 export default function CamerasScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const cameras = useCameraStore((state) => state.cameras);
-  const passwords = useCameraStore((state) => state.passwords);
   const settings = useCameraStore((state) => state.settings);
   const updateSettings = useCameraStore((state) => state.updateSettings);
   const removeCamera = useCameraStore((state) => state.removeCamera);
+  const cameras = usePlayableCameras();
   const streaming = useShouldStream();
   const live = streaming && settings.livePreviews;
+  useHubRefresh();
 
-  const openCamera = useCallback((camera: Camera) => router.push(`/camera/${camera.id}`), [router]);
+  const hubCount = cameras.filter((camera) => camera.source === 'hub').length;
+  const hubDown = cameras.some((camera) => camera.unreachable);
 
+  const openCamera = useCallback(
+    (camera: PlayableCamera) => router.push(`/camera/${encodeURIComponent(camera.id)}`),
+    [router],
+  );
+
+  /** A hub camera is the hub's to change, so its long-press explains where it came from instead. */
   const showActions = useCallback(
-    (camera: Camera) => {
+    (camera: PlayableCamera) => {
+      const brandLabel = getBrand(camera.brand).label.split(' /')[0] ?? '';
+      if (camera.source === 'hub') {
+        const lines = [
+          `${brandLabel} · served by ${camera.origin}`,
+          'This camera is managed by the hub. Add, rename or remove it there.',
+        ];
+        if (camera.unreachable) {
+          lines.push(
+            'The hub is not answering, so this is its cached entry. The app has no credentials of its own for this camera and cannot reach it without the hub.',
+          );
+        }
+        Alert.alert(camera.name, lines.join('\n\n'), [{ text: 'Close', style: 'cancel' }]);
+        return;
+      }
       Alert.alert(camera.name, undefined, [
         { text: 'Edit', onPress: () => router.push(`/camera/${camera.id}/edit`) },
         {
@@ -75,6 +99,8 @@ export default function CamerasScreen() {
         <View style={styles.subRow}>
           <Text style={styles.subtitle}>
             {cameras.length} {cameras.length === 1 ? 'camera' : 'cameras'}
+            {hubCount > 0 ? ` · ${hubCount} from the hub` : ''}
+            {hubDown ? ' · hub unreachable' : ''}
             {settings.livePreviews ? '' : ' · previews off'}
           </Text>
           <View style={styles.columnToggle} accessibilityRole="radiogroup">
@@ -138,8 +164,7 @@ export default function CamerasScreen() {
         renderItem={({ item }) => (
           <CameraTile
             camera={item}
-            password={passwords[item.id] ?? ''}
-            live={live}
+            live={shouldPreview(item, live)}
             large={large}
             onPress={() => openCamera(item)}
             onLongPress={() => showActions(item)}
@@ -147,7 +172,9 @@ export default function CamerasScreen() {
         )}
         ListFooterComponent={
           <View style={styles.footer}>
-            <Muted center>Long-press a camera to edit</Muted>
+            <Muted center>
+              {hubCount > 0 ? 'Long-press for options · hub cameras are managed by the hub' : 'Long-press a camera to edit'}
+            </Muted>
           </View>
         }
       />

@@ -1,17 +1,24 @@
 import Constants from 'expo-constants';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { VlcLogSheet } from '@/components/VlcLogSheet';
 import { Button, Card, Muted, SectionLabel, Segmented } from '@/components/ui';
 import { useCameraStore } from '@/store/cameraStore';
+import { useHubStore } from '@/store/hubStore';
 import { colors, font, spacing } from '@/theme';
 
 type Columns = '1' | '2' | '3';
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const settings = useCameraStore((state) => state.settings);
   const updateSettings = useCameraStore((state) => state.updateSettings);
+  const hub = useHubStore((state) => state.hub);
+  const connected = useHubStore((state) => state.baseUrl !== '');
+  const hubCameras = useHubStore((state) => state.cameras.length);
+  const reachable = useHubStore((state) => state.reachable);
   const [logOpen, setLogOpen] = useState(false);
 
   return (
@@ -52,6 +59,21 @@ export default function SettingsScreen() {
             trackColor={{ true: colors.accent, false: colors.border }}
           />
         </View>
+      </Card>
+
+      <Card>
+        <SectionLabel>Camera hub</SectionLabel>
+        <Muted>
+          {connected
+            ? `${hub?.name ?? 'Hub'} · ${hubCameras} ${hubCameras === 1 ? 'camera' : 'cameras'}${reachable ? '' : ' · not answering'}`
+            : 'Pull the camera list from a hub on your network and play the streams it restreams.'}
+        </Muted>
+        <Button
+          title={connected ? 'Manage hub' : 'Connect to hub'}
+          variant="secondary"
+          icon="server-outline"
+          onPress={() => router.push('/hub')}
+        />
       </Card>
 
       <Card>

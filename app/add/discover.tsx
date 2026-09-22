@@ -169,6 +169,7 @@ function DeviceCard({ device, existingName, identifying, expanded, onToggle, onA
         channel: 1,
         mainPath: mainUri.path,
         subPath,
+        livePreview: true,
         onvif: {
           port: device.port,
           manufacturer: connected.info.manufacturer,

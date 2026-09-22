@@ -1,31 +1,26 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
-import * as SecureStore from 'expo-secure-store';
-import { Platform } from 'react-native';
 import { create } from 'zustand';
 
+import { readSecret, secretKey, secrets } from '@/lib/secrets';
 import { DEFAULT_SETTINGS, type Camera, type CameraInput, type Settings } from '@/lib/types';
 
 const CAMERAS_KEY = 'camerahub.cameras';
 const SETTINGS_KEY = 'camerahub.settings';
 
 function passwordKey(id: string): string {
-  return `camerahub.pw.${id.replace(/[^A-Za-z0-9._-]/g, '')}`;
+  return secretKey('camerahub.pw.', id);
 }
 
-/** The keychain is native only; the browser preview keeps passwords in plain storage and is never a shipping target. */
-const secrets = {
-  get: (key: string) => (Platform.OS === 'web' ? AsyncStorage.getItem(key) : SecureStore.getItemAsync(key)),
-  set: (key: string, value: string) => (Platform.OS === 'web' ? AsyncStorage.setItem(key, value) : SecureStore.setItemAsync(key, value)),
-  remove: (key: string) => (Platform.OS === 'web' ? AsyncStorage.removeItem(key) : SecureStore.deleteItemAsync(key)),
-};
+/** A camera as older versions wrote it: everything added since may be missing. */
+type StoredCamera = Omit<Camera, 'livePreview'> & Partial<Pick<Camera, 'livePreview'>>;
 
-async function readPassword(id: string): Promise<string> {
-  try {
-    return (await secrets.get(passwordKey(id))) ?? '';
-  } catch {
-    return '';
-  }
+/**
+ * Records saved before per-camera previews existed carry no `livePreview`, and the grid did
+ * stream them, so an absent flag has to read as on.
+ */
+export function restoreCameras(stored: StoredCamera[]): Camera[] {
+  return stored.map((camera) => ({ ...camera, livePreview: camera.livePreview ?? true }));
 }
 
 async function persistCameras(cameras: Camera[]): Promise<void> {
@@ -59,7 +54,7 @@ export const useCameraStore = create<CameraState>((set, get) => ({
         AsyncStorage.getItem(CAMERAS_KEY),
         AsyncStorage.getItem(SETTINGS_KEY),
       ]);
-      if (rawCameras) cameras = JSON.parse(rawCameras) as Camera[];
+      if (rawCameras) cameras = restoreCameras(JSON.parse(rawCameras) as StoredCamera[]);
       if (rawSettings) settings = { ...DEFAULT_SETTINGS, ...(JSON.parse(rawSettings) as Partial<Settings>) };
     } catch {
       cameras = [];
@@ -67,7 +62,7 @@ export const useCameraStore = create<CameraState>((set, get) => ({
     const passwords: Record<string, string> = {};
     await Promise.all(
       cameras.map(async (camera) => {
-        passwords[camera.id] = await readPassword(camera.id);
+        passwords[camera.id] = await readSecret(passwordKey(camera.id));
       }),
     );
     set({ cameras, passwords, settings, hydrated: true });

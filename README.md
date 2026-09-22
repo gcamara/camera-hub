@@ -14,6 +14,11 @@ and keeps passwords in the iOS keychain.
   brand, names the brand it recognised, signs in, lists media profiles and reads the real stream
   addresses from the camera. Cameras without ONVIF get an **Add manually** shortcut with host and brand
   filled in.
+- **Camera hub** (optional): point the app at a hub on your network and it lists the hub's cameras
+  beside your own, playing the streams the hub restreams through go2rtc. The hub's cameras are
+  read‑only here and their own passwords never reach the phone.
+- **Live preview per camera**: a camera that tolerates a single RTSP session can be left out of the
+  grid, so the full‑screen viewer always gets the session.
 - Full‑screen viewer: main/sub stream switch, mute, auto‑reconnect with back‑off.
 
 Cloud‑only cameras (Ring, Nest, Arlo, Blink, Eufy without RTSP) have no local stream and cannot be added.
@@ -89,15 +94,35 @@ app/                       expo-router screens
   camera/[id]/edit.tsx     edit + delete
   add/{index,manual,discover}.tsx
   settings.tsx
+  hub.tsx                  connect to / manage the camera hub
 modules/vlc-player/        local Expo module: VlcPlayerView (Swift + MobileVLCKit), iOS only
 src/components/            CameraPlayer (adapter over VlcPlayerView), CameraTile, CameraForm, ui primitives
-src/hooks/                 useReconnect (back-off), useVisibility (focus + AppState gating)
+src/hooks/                 useReconnect (back-off), useVisibility (focus + AppState gating),
+                           usePlayable (local + hub cameras), useHubRefresh (retry on foreground)
 src/lib/brands.ts          RTSP path presets per brand
+src/lib/hub.ts             hub API client: bearer auth, ETag, defensive payload parsing
+src/lib/playable.ts        one view model for local and hub cameras; grid preview gating
+src/lib/secrets.ts         keychain wrapper shared by camera passwords and the hub token
 src/lib/fingerprint.ts     brand detection: ONVIF manufacturer, web-page fingerprints, brand-only ports
 src/lib/rtsp.ts            URL build/parse/redact
 src/lib/onvif/             SOAP + WS-Security digest, XML parsing, device client, subnet discovery
 src/store/cameraStore.ts   zustand store; AsyncStorage for cameras, SecureStore for passwords
+src/store/hubStore.ts      hub address + cached list/ETag in AsyncStorage, token in SecureStore
 ```
+
+### The hub API
+
+```
+GET {hubBaseUrl}/api/cameras          Authorization: Bearer <token>
+200 + ETag  { "hub": { "name", "version" },
+              "cameras": [ { "id", "name", "brand", "livePreview",
+                             "streams": { "main": { "url" }, "sub": { "url" } },
+                             "capabilities": { "ptz" } } ] }
+If-None-Match: <etag>  →  304        bad or missing token  →  401 { "error" }
+```
+
+An unknown `brand` falls back to the generic preset, a missing `livePreview` reads as on, and an entry
+without an id or an `rtsp://` main stream is dropped rather than shown as a tile that never connects.
 
 ## Notes and limits
 
@@ -110,6 +135,9 @@ src/store/cameraStore.ts   zustand store; AsyncStorage for cameras, SecureStore 
   Wi‑Fi packet loss far better than RTP over UDP.
 - Tapo cameras: sign in with the *Camera Account* created in the Tapo app, not your TP‑Link login.
 - Away from home, reach your LAN through a VPN (Tailscale, WireGuard); the app has no relay.
+- When the hub cannot be reached, its cameras stay on the grid from cache and say so. They cannot be
+  played in that state: the phone holds go2rtc's credentials, not the cameras', so there is no direct
+  route to fall back to. The list is asked for again whenever the app returns to the foreground.
 - Bundle size grows by roughly 25–35 MB (thinned) because of MobileVLCKit.
 
 ### Xcode Cloud (alternative to EAS)

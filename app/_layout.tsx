@@ -5,18 +5,22 @@ import { useEffect } from 'react';
 import { View } from 'react-native';
 
 import { useCameraStore } from '@/store/cameraStore';
+import { useHubStore } from '@/store/hubStore';
 import { colors } from '@/theme';
 
 export default function RootLayout() {
   const hydrated = useCameraStore((state) => state.hydrated);
   const hydrate = useCameraStore((state) => state.hydrate);
+  const hubHydrated = useHubStore((state) => state.hydrated);
+  const hydrateHub = useHubStore((state) => state.hydrate);
 
   useEffect(() => {
     void hydrate();
+    void hydrateHub();
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => undefined);
-  }, [hydrate]);
+  }, [hydrate, hydrateHub]);
 
-  if (!hydrated) return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
+  if (!hydrated || !hubHydrated) return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
 
   return (
     <>
@@ -32,6 +36,7 @@ export default function RootLayout() {
       >
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+        <Stack.Screen name="hub" options={{ title: 'Camera hub' }} />
         <Stack.Screen name="add/index" options={{ title: 'Add camera' }} />
         <Stack.Screen name="add/manual" options={{ title: 'Add manually' }} />
         <Stack.Screen name="add/discover" options={{ title: 'Find cameras' }} />

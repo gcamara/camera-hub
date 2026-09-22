@@ -34,6 +34,8 @@ export interface Camera {
   mainPath: string;
   /** RTSP path for the low-resolution stream; empty string when the camera has none. */
   subPath: string;
+  /** Off for a camera that tolerates a single RTSP session, so the grid leaves it to the viewer. */
+  livePreview: boolean;
   onvif?: OnvifInfo;
   createdAt: number;
 }
