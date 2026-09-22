@@ -143,7 +143,8 @@ class VlcPlayerView(context: Context, appContext: AppContext) : ExpoView(context
     lastState = null
     val uri = currentUri ?: return
     log("restart ${describe(uri)} muted=$muted paused=$paused ${width}x${height}")
-    if (!uri.startsWith("rtsp", ignoreCase = true)) {
+    // RTSP straight from a camera, or the hub's fragmented MP4 over HTTP.
+    if (!Regex("^(rtsps?|https?)://", RegexOption.IGNORE_CASE).containsMatchIn(uri)) {
       onError(mapOf("message" to "Invalid stream URL", "state" to "invalid"))
       return
     }

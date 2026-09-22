@@ -40,8 +40,8 @@ const hubCamera: HubCamera = {
   ptz: false,
 };
 
-const phone: HubStreamContext = { baseUrl: 'http://hub.lan:8080', web: false };
-const browser: HubStreamContext = { baseUrl: 'http://hub.lan:8080', web: true };
+const phone: HubStreamContext = { baseUrl: 'http://hub.lan:8080', web: false, token: 'placeholder token' };
+const browser: HubStreamContext = { baseUrl: 'http://hub.lan:8080', web: true, token: 'placeholder token' };
 
 describe('playableFromCamera', () => {
   it('builds both stream URLs from the saved camera and its password', () => {
@@ -109,10 +109,23 @@ describe('resolveWebUrl', () => {
 });
 
 describe('hubStreamUrl', () => {
-  it('gives a phone the RTSP URL and a browser the resolved web URL', () => {
-    expect(hubStreamUrl('rtsp://hub.lan/garage', '/stream/garage/main.mp4', phone)).toBe('rtsp://hub.lan/garage');
+  it('gives a phone the hub MP4 with the token as the Basic password, and a browser the bare URL', () => {
+    expect(hubStreamUrl('rtsp://hub.lan/garage', '/stream/garage/main.mp4', phone)).toBe(
+      'http://hub:placeholder%20token@hub.lan:8080/stream/garage/main.mp4',
+    );
     expect(hubStreamUrl('rtsp://hub.lan/garage', '/stream/garage/main.mp4', browser)).toBe(
       'http://hub.lan:8080/stream/garage/main.mp4',
+    );
+  });
+
+  it('never puts the token in a URL a browser will use', () => {
+    expect(hubStreamUrl('rtsp://hub.lan/garage', '/stream/garage/main.mp4', browser)).not.toContain('placeholder');
+  });
+
+  it('falls back to RTSP on a phone when the hub offers no web stream or there is no token', () => {
+    expect(hubStreamUrl('rtsp://hub.lan/garage', '', phone)).toBe('rtsp://hub.lan/garage');
+    expect(hubStreamUrl('rtsp://hub.lan/garage', '/stream/garage/main.mp4', { ...phone, token: '' })).toBe(
+      'rtsp://hub.lan/garage',
     );
   });
 
@@ -150,8 +163,12 @@ describe('playableFromHub on web', () => {
 
 describe('previewUrl', () => {
   it('prefers the sub stream and falls back to the main one', () => {
-    expect(previewUrl(playableFromHub(hubCamera, hub, phone, true, false))).toBe(hubCamera.subUrl);
-    expect(previewUrl(playableFromHub({ ...hubCamera, subUrl: '', subWebUrl: '' }, hub, phone, true, false))).toBe(hubCamera.mainUrl);
+    expect(previewUrl(playableFromHub(hubCamera, hub, phone, true, false))).toBe(
+      'http://hub:placeholder%20token@hub.lan:8080/stream/garage/sub.mp4',
+    );
+    expect(previewUrl(playableFromHub({ ...hubCamera, subUrl: '', subWebUrl: '' }, hub, phone, true, false))).toBe(
+      'http://hub:placeholder%20token@hub.lan:8080/stream/garage/main.mp4',
+    );
   });
 });
 

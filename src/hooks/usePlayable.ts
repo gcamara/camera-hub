@@ -12,12 +12,13 @@ export function usePlayableCameras(): PlayableCamera[] {
   const hub = useHubStore((state) => state.hub);
   const hubCameras = useHubStore((state) => state.cameras);
   const baseUrl = useHubStore((state) => state.baseUrl);
+  const token = useHubStore((state) => state.token);
   const reachable = useHubStore((state) => state.reachable);
   const previewOff = useHubStore((state) => state.previewOff);
 
   // The single place the app decides which of a hub camera's two stream URLs this build can
   // play. Everything below reads `mainUrl`/`subUrl` and never asks what platform it is on.
-  const context = useMemo<HubStreamContext>(() => ({ baseUrl, web: isWeb }), [baseUrl]);
+  const context = useMemo<HubStreamContext>(() => ({ baseUrl, web: isWeb, token }), [baseUrl, token]);
 
   return useMemo(
     () => [

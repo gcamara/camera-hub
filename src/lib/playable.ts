@@ -6,14 +6,24 @@ export type CameraSource = 'local' | 'hub';
 
 /**
  * Where a hub camera's streams are read from, and by what. This is the single seam where the
- * app decides that a browser plays the hub's fragmented MP4 and a phone plays RTSP; every
- * screen downstream reads `mainUrl`/`subUrl` and never asks which platform it is on.
+ * app decides what each platform plays; every screen downstream reads `mainUrl`/`subUrl`
+ * and never asks which platform it is on.
+ *
+ * Both play the hub's fragmented MP4 over HTTP. A phone does not use the hub's RTSP: iOS
+ * VLCKit's bundled live555 (2016) idles ~10 s between DESCRIBE and the first SETUP, and
+ * go2rtc closes an RTSP connection after 5 s of silence (not configurable), so the video
+ * SETUP always lands on a dead connection and only the audio track survives a reconnect.
  */
 export interface HubStreamContext {
   /** The hub's origin, as the hub store normalised it. */
   baseUrl: string;
-  /** True in a browser, where RTSP is unplayable and the hub's MP4 path is the only stream. */
+  /** True in a browser, which authenticates the stream with the hub's session cookie. */
   web: boolean;
+  /**
+   * The hub's API token. libVLC cannot add a header to a request, so a phone carries it
+   * as the Basic password in the URL, which the hub accepts on its stream route only.
+   */
+  token: string;
 }
 
 /**
@@ -34,7 +44,11 @@ export function resolveWebUrl(baseUrl: string, path: string): string {
  * nothing is dialled and the tile says why.
  */
 export function hubStreamUrl(rtspUrl: string, webPath: string, context: HubStreamContext): string {
-  return context.web ? resolveWebUrl(context.baseUrl, webPath) : rtspUrl;
+  const http = resolveWebUrl(context.baseUrl, webPath);
+  if (context.web) return http;
+  // A hub too old to offer web streams still has RTSP; that is better than nothing.
+  if (http === '' || context.token === '') return rtspUrl;
+  return http.replace(/^(https?:\/\/)/, `$1hub:${encodeURIComponent(context.token)}@`);
 }
 
 /**
